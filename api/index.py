@@ -27,8 +27,8 @@ def kv_set(key, value):
         raise Exception("UPSTASH_REDIS_REST_URL not set")
     url = f"{UPSTASH_URL}/set/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    # 👇 Upstash ko JSON array chahiye, object nahi
-    resp = req.post(url, headers=headers, json=[value], timeout=5)
+    # 👇 Raw string body bhejna hai, JSON array nahi
+    resp = req.post(url, headers=headers, data=value, timeout=5)
     if resp.status_code != 200:
         raise Exception(f"KV SET failed: {resp.status_code} {resp.text}")
 
