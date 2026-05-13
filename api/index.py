@@ -10,7 +10,7 @@ GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
-# ---------- KV Helpers (Upstash REST API) with error handling ----------
+# ---------- KV Helpers (Upstash REST API) ----------
 def kv_get(key):
     if not UPSTASH_URL:
         raise Exception("UPSTASH_REDIS_REST_URL not set")
@@ -27,10 +27,10 @@ def kv_set(key, value):
         raise Exception("UPSTASH_REDIS_REST_URL not set")
     url = f"{UPSTASH_URL}/set/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    resp = req.post(url, headers=headers, json={"value": value}, timeout=5)
+    # 👇 Upstash ko JSON array chahiye, object nahi
+    resp = req.post(url, headers=headers, json=[value], timeout=5)
     if resp.status_code != 200:
         raise Exception(f"KV SET failed: {resp.status_code} {resp.text}")
-    # Success
 
 # ---------- Bot Config ----------
 def get_official_bot_links():
@@ -50,9 +50,9 @@ async def add_bot_to_config(name, username, link, currency):
         if data:
             bots = json.loads(data)
     except:
-        pass  # if key doesn't exist
+        pass
     bots.append({"name": name, "username": username, "link": link, "currency": currency})
-    kv_set("official_bots", json.dumps(bots))  # will raise on failure
+    kv_set("official_bots", json.dumps(bots))
 
 async def delete_bot_by_index(index):
     try:
@@ -109,13 +109,11 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = msg.text.strip()
 
-    # /debug command to test KV connectivity
+    # /debug command
     if text == "/debug":
-        msg_reply = await msg.reply_text("Testing KV...")
+        await msg.reply_text("Testing KV...")
         try:
-            # Set test key
             kv_set("test_key", "test_value")
-            # Get test key
             val = kv_get("test_key")
             if val == "test_value":
                 await msg.reply_text("✅ KV is working perfectly!")
@@ -172,12 +170,10 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await add_bot_to_config(bot["name"], bot["username"], bot["link"], bot["currency"])
                 await msg.reply_text("✅ Bot added successfully!")
-                context.user_data.pop("add_step", None)
-                context.user_data.pop("new_bot", None)
             except Exception as e:
                 await msg.reply_text(f"❌ Failed to save bot: {str(e)}")
-                context.user_data.pop("add_step", None)
-                context.user_data.pop("new_bot", None)
+            context.user_data.pop("add_step", None)
+            context.user_data.pop("new_bot", None)
     elif text.startswith("/list"):
         try:
             bots = await list_bots()
