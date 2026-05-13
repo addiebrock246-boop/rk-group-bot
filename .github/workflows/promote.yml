@@ -1,11 +1,24 @@
 name: RK Group Promotion
 on:
   schedule:
-    - cron: '*/30 * * * *'   # har 30 minute
-  workflow_dispatch:          # manual trigger ke liye
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
 jobs:
   promote:
     runs-on: ubuntu-latest
     steps:
-      - name: Call promote endpoint
-        run: curl -X GET "https://rk-group-bot.vercel.app/api/promote"
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install requests
+        run: pip install requests
+      - name: Run promote script
+        env:
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GROUP_CHAT_ID: ${{ secrets.GROUP_CHAT_ID }}
+        run: python scripts/promote.py
