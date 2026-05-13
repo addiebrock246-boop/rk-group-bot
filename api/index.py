@@ -1,7 +1,7 @@
 import os, json, random, requests as req, asyncio
 from flask import Flask, request, jsonify
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
@@ -35,62 +35,53 @@ def kv_delete(key):
         return
     url = f"{UPSTASH_URL}/del/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    req.get(url, headers=headers, timeout=5)  # ignore errors
+    req.get(url, headers=headers, timeout=5)
 
 # ---------- Bot Config ----------
-def get_official_bot_links():
+def get_official_bots():
     try:
         data = kv_get("official_bots")
         if data:
-            bots = json.loads(data)
-            return [b['link'] for b in bots]
+            return json.loads(data)
     except:
         pass
     return []
 
 async def add_bot_to_config(name, username, link, currency):
-    bots = []
-    try:
-        data = kv_get("official_bots")
-        if data:
-            bots = json.loads(data)
-    except:
-        pass
+    bots = get_official_bots()
     bots.append({"name": name, "username": username, "link": link, "currency": currency})
     kv_set("official_bots", json.dumps(bots))
 
 async def delete_bot_by_index(index):
-    data = kv_get("official_bots")
-    if data:
-        bots = json.loads(data)
-        if 0 <= index < len(bots):
-            del bots[index]
-            kv_set("official_bots", json.dumps(bots))
-            return True
+    bots = get_official_bots()
+    if 0 <= index < len(bots):
+        del bots[index]
+        kv_set("official_bots", json.dumps(bots))
+        return True
     return False
-
-async def list_bots():
-    data = kv_get("official_bots")
-    if data:
-        return json.loads(data)
-    return []
 
 # ---------- GROUP HANDLERS ----------
 async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for member in update.message.new_chat_members:
         if member.is_bot: continue
-        official_links = get_official_bot_links()
-        link_text = "\n".join(f"👉 {link}" for link in official_links)
-        if not link_text:
-            link_text = "No official games yet."
-        text = (
-            f"👋 <b>Welcome, {member.mention_html()}!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"🎰 <b>Play our official crypto games:</b>\n"
-            f"{link_text}\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"ℹ️ Only admins can send messages here."
-        )
+        bots = get_official_bots()
+        if not bots:
+            text = (
+                "👋 <b>Welcome, {}</b>!\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🎰 <b>PLAY OUR RK GAMES</b>\n"
+                "No official games yet.\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            ).format(member.mention_html())
+        else:
+            lines = [f"👉 <b>{bot['name']}</b> (@{bot['username']}) — {bot['currency']}  <a href='{bot['link']}'>Play</a>" for bot in bots]
+            text = (
+                "👋 <b>Welcome, {}</b>!\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🎰 <b>PLAY OUR RK GAMES</b>\n"
+                "{}\n"
+                "━━━━━━━━━━━━━━━━━━━━"
+            ).format(member.mention_html(), "\n".join(lines))
         await update.message.reply_html(text)
 
 # ---------- DM HANDLER (Owner Only) ----------
@@ -137,7 +128,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📋 Commands:\n"
                 "/add - Add a new bot (multi‑step)\n"
                 "/list - List all bots\n"
-                "/delete <index> - Remove a bot\n"
+                "/delete - Delete bots (inline buttons)\n"
                 "/reset - Clear authentication\n"
                 "/debug - Test KV connection\n"
                 "/cancel - Cancel current add session"
@@ -190,7 +181,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("✅ Bot added successfully!")
             except Exception as e:
                 await msg.reply_text(f"❌ Failed to save bot: {str(e)}")
-            kv_delete(state_key)  # remove state
+            kv_delete(state_key)
         return
 
     # No active session, handle commands
@@ -202,11 +193,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     elif text.startswith("/list"):
-        try:
-            bots = await list_bots()
-        except Exception as e:
-            await msg.reply_text(f"Error reading bots: {str(e)}")
-            return
+        bots = get_official_bots()
         if not bots:
             await msg.reply_text("No bots added yet.")
         else:
@@ -216,24 +203,49 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_html(resp)
 
     elif text.startswith("/delete"):
-        parts = text.split()
-        if len(parts) == 2:
-            try:
-                idx = int(parts[1]) - 1
-                if await delete_bot_by_index(idx):
-                    await msg.reply_text("✅ Bot deleted.")
-                else:
-                    await msg.reply_text("Invalid index.")
-            except Exception as e:
-                await msg.reply_text(f"Error: {str(e)}")
-        else:
-            await msg.reply_text("Usage: /delete <index>")
+        bots = get_official_bots()
+        if not bots:
+            await msg.reply_text("No bots to delete.")
+            return
+        keyboard = []
+        for i, bot in enumerate(bots):
+            keyboard.append([InlineKeyboardButton(f"{bot['name']} (@{bot['username']})", callback_data=f"del_{i}")])
+        keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="del_cancel")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await msg.reply_text("Select a bot to delete:", reply_markup=reply_markup)
 
     else:
         await msg.reply_text(
             "Unknown command.\n"
-            "Available: /add, /list, /delete <index>, /reset, /debug, /cancel"
+            "Available: /add, /list, /delete, /reset, /debug, /cancel"
         )
+
+# ---------- CALLBACK QUERY HANDLER ----------
+async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    chat_id = query.message.chat_id
+    message_id = query.message.message_id
+
+    if data == "del_cancel":
+        await context.bot.edit_message_text("Delete cancelled.", chat_id=chat_id, message_id=message_id)
+        return
+
+    # Parse index
+    try:
+        idx = int(data.split("_")[1])
+    except:
+        await context.bot.edit_message_text("Invalid selection.", chat_id=chat_id, message_id=message_id)
+        return
+
+    try:
+        if await delete_bot_by_index(idx):
+            await context.bot.edit_message_text("✅ Bot deleted successfully.", chat_id=chat_id, message_id=message_id)
+        else:
+            await context.bot.edit_message_text("❌ Invalid index.", chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        await context.bot.edit_message_text(f"Error: {str(e)}", chat_id=chat_id, message_id=message_id)
 
 # ---------- FLASK (fresh Application per request) ----------
 app = Flask(__name__)
@@ -247,6 +259,7 @@ def webhook():
         application = Application.builder().token(BOT_TOKEN).build()
         application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
         application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
+        application.add_handler(CallbackQueryHandler(delete_callback, pattern=r"^del_"))
         loop.run_until_complete(application.initialize())
         update = Update.de_json(data, application.bot)
         loop.run_until_complete(application.process_update(update))
