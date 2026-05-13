@@ -7,14 +7,14 @@ import asyncio
 BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
-KV_REST_API_URL = os.environ.get("KV_REST_API_URL", "")
-KV_REST_API_TOKEN = os.environ.get("KV_REST_API_TOKEN", "")
+UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
+UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
-# ---------- KV Helpers ----------
+# ---------- KV Helpers (Upstash REST API) ----------
 def kv_get(key):
-    if not KV_REST_API_URL: return None
-    url = f"{KV_REST_API_URL}/get/{key}"
-    headers = {"Authorization": f"Bearer {KV_REST_API_TOKEN}"}
+    if not UPSTASH_URL: return None
+    url = f"{UPSTASH_URL}/get/{key}"
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
     try:
         resp = req.get(url, headers=headers, timeout=5)
         data = resp.json()
@@ -23,9 +23,9 @@ def kv_get(key):
         return None
 
 def kv_set(key, value):
-    if not KV_REST_API_URL: return
-    url = f"{KV_REST_API_URL}/set/{key}"
-    headers = {"Authorization": f"Bearer {KV_REST_API_TOKEN}"}
+    if not UPSTASH_URL: return
+    url = f"{UPSTASH_URL}/set/{key}"
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
     try:
         req.post(url, headers=headers, json={"value": value}, timeout=5)
     except:
@@ -96,14 +96,13 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = msg.text.strip()
 
-    # /reset command – clear auth
+    # /reset command
     if text == "/reset":
-        if user.id in authenticated_users:
-            authenticated_users.discard(user.id)
+        authenticated_users.discard(user.id)
         await msg.reply_text("🔒 Authentication reset. Send password to continue.")
         return
 
-    # Check password if not authenticated
+    # Password check if not authenticated
     if user.id not in authenticated_users:
         if text == DM_PASSWORD:
             authenticated_users.add(user.id)
