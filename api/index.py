@@ -10,57 +10,70 @@ GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
-# ---------- KV Helpers (Upstash REST API) ----------
+# ---------- KV Helpers (Upstash REST API) with error handling ----------
 def kv_get(key):
-    if not UPSTASH_URL: return None
+    if not UPSTASH_URL:
+        raise Exception("UPSTASH_REDIS_REST_URL not set")
     url = f"{UPSTASH_URL}/get/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    try:
-        resp = req.get(url, headers=headers, timeout=5)
-        data = resp.json()
-        return data.get("result")
-    except:
-        return None
+    resp = req.get(url, headers=headers, timeout=5)
+    if resp.status_code != 200:
+        raise Exception(f"KV GET failed: {resp.status_code} {resp.text}")
+    data = resp.json()
+    return data.get("result")
 
 def kv_set(key, value):
-    if not UPSTASH_URL: return
+    if not UPSTASH_URL:
+        raise Exception("UPSTASH_REDIS_REST_URL not set")
     url = f"{UPSTASH_URL}/set/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    try:
-        req.post(url, headers=headers, json={"value": value}, timeout=5)
-    except:
-        pass
+    resp = req.post(url, headers=headers, json={"value": value}, timeout=5)
+    if resp.status_code != 200:
+        raise Exception(f"KV SET failed: {resp.status_code} {resp.text}")
+    # Success
 
 # ---------- Bot Config ----------
 def get_official_bot_links():
-    data = kv_get("official_bots")
-    if data:
-        bots = json.loads(data)
-        return [b['link'] for b in bots]
+    try:
+        data = kv_get("official_bots")
+        if data:
+            bots = json.loads(data)
+            return [b['link'] for b in bots]
+    except:
+        pass
     return []
 
 async def add_bot_to_config(name, username, link, currency):
     bots = []
-    data = kv_get("official_bots")
-    if data:
-        bots = json.loads(data)
+    try:
+        data = kv_get("official_bots")
+        if data:
+            bots = json.loads(data)
+    except:
+        pass  # if key doesn't exist
     bots.append({"name": name, "username": username, "link": link, "currency": currency})
-    kv_set("official_bots", json.dumps(bots))
+    kv_set("official_bots", json.dumps(bots))  # will raise on failure
 
 async def delete_bot_by_index(index):
-    data = kv_get("official_bots")
-    if data:
-        bots = json.loads(data)
-        if 0 <= index < len(bots):
-            del bots[index]
-            kv_set("official_bots", json.dumps(bots))
-            return True
+    try:
+        data = kv_get("official_bots")
+        if data:
+            bots = json.loads(data)
+            if 0 <= index < len(bots):
+                del bots[index]
+                kv_set("official_bots", json.dumps(bots))
+                return True
+    except Exception as e:
+        raise e
     return False
 
 async def list_bots():
-    data = kv_get("official_bots")
-    if data:
-        return json.loads(data)
+    try:
+        data = kv_get("official_bots")
+        if data:
+            return json.loads(data)
+    except:
+        pass
     return []
 
 # ---------- GROUP HANDLERS ----------
@@ -96,6 +109,22 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = msg.text.strip()
 
+    # /debug command to test KV connectivity
+    if text == "/debug":
+        msg_reply = await msg.reply_text("Testing KV...")
+        try:
+            # Set test key
+            kv_set("test_key", "test_value")
+            # Get test key
+            val = kv_get("test_key")
+            if val == "test_value":
+                await msg.reply_text("✅ KV is working perfectly!")
+            else:
+                await msg.reply_text(f"⚠️ KV GET returned unexpected: {val}")
+        except Exception as e:
+            await msg.reply_text(f"❌ KV Error: {str(e)}")
+        return
+
     # /reset command
     if text == "/reset":
         authenticated_users.discard(user.id)
@@ -112,7 +141,8 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/add - Add a new bot\n"
                 "/list - List all bots\n"
                 "/delete <index> - Remove a bot\n"
-                "/reset - Clear authentication"
+                "/reset - Clear authentication\n"
+                "/debug - Test KV connection"
             )
         else:
             await msg.reply_text("Incorrect password.")
@@ -139,12 +169,21 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif step == "currency":
             context.user_data["new_bot"]["currency"] = text
             bot = context.user_data["new_bot"]
-            await add_bot_to_config(bot["name"], bot["username"], bot["link"], bot["currency"])
-            await msg.reply_text("✅ Bot added successfully!")
-            context.user_data.pop("add_step", None)
-            context.user_data.pop("new_bot", None)
+            try:
+                await add_bot_to_config(bot["name"], bot["username"], bot["link"], bot["currency"])
+                await msg.reply_text("✅ Bot added successfully!")
+                context.user_data.pop("add_step", None)
+                context.user_data.pop("new_bot", None)
+            except Exception as e:
+                await msg.reply_text(f"❌ Failed to save bot: {str(e)}")
+                context.user_data.pop("add_step", None)
+                context.user_data.pop("new_bot", None)
     elif text.startswith("/list"):
-        bots = await list_bots()
+        try:
+            bots = await list_bots()
+        except Exception as e:
+            await msg.reply_text(f"Error reading bots: {str(e)}")
+            return
         if not bots:
             await msg.reply_text("No bots added yet.")
         else:
@@ -159,10 +198,10 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("✅ Bot deleted.")
             else:
                 await msg.reply_text("Invalid index.")
-        except:
-            await msg.reply_text("Usage: /delete <index>")
+        except Exception as e:
+            await msg.reply_text(f"Error: {str(e)}")
     else:
-        await msg.reply_text("Unknown command. Use /add, /list, /delete, /reset.")
+        await msg.reply_text("Unknown command. Use /add, /list, /delete, /reset, /debug.")
 
 # ---------- FLASK ----------
 app = Flask(__name__)
