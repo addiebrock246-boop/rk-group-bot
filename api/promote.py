@@ -1,10 +1,13 @@
-import os, json, random, requests as req, asyncio
+import os, json, random, requests as req
+from flask import Flask, jsonify
 
+# ---------- TERI DETAILS (HARDCODED) ----------
 BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
+# ---------- KV Helper (Redis se data padhne ke liye) ----------
 def kv_get(key):
     if not UPSTASH_URL:
         return None
@@ -17,17 +20,7 @@ def kv_get(key):
     except:
         return None
 
-def kv_set(key, value):
-    if not UPSTASH_URL:
-        return
-    url = f"{UPSTASH_URL}/set/{key}"
-    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    try:
-        # 👇 Raw string body bhejna hai, JSON array nahi
-        req.post(url, headers=headers, data=value, timeout=5)
-    except:
-        pass
-
+# ---------- PLAYER NAMES (wahi 1000+ mixed names) ----------
 PLAYER_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas",
     "Charles", "Christopher", "Daniel", "Matthew", "Anthony", "Mark", "Donald", "Steven", "Paul",
@@ -69,18 +62,30 @@ PLAYER_NAMES = [
     "Bushra", "Souad", "Asma", "Khadeeja", "Mariam", "Aya", "Ruba", "Shireen"
 ]
 
-async def send_promotion():
+# ---------- FLASK APP ----------
+app = Flask(__name__)
+
+@app.route("/", methods=["GET"])
+def promote():
+    # Check GROUP_CHAT_ID
     if not GROUP_CHAT_ID:
-        return
+        return jsonify({"error": "GROUP_CHAT_ID not set"}), 500
+
+    # Get official bots config from Redis
     data = kv_get("official_bots")
     if not data:
-        return
+        return jsonify({"ok": True, "message": "No official bots"})
+
     bots = json.loads(data)
     if not bots:
-        return
+        return jsonify({"ok": True, "message": "No bots configured"})
+
+    # Pick random bot and player
     bot_config = random.choice(bots)
     player = random.choice(PLAYER_NAMES)
     amount = round(random.uniform(100, 5000), 2)
+
+    # Prepare promotional message
     text = (
         f"🔥💎 <b>{bot_config['name']}</b> 💎🔥\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -90,11 +95,17 @@ async def send_promotion():
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>1000+ players earning daily!</i>"
     )
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    req.post(url, json={"chat_id": GROUP_CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=10)
 
-async def handler(request):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    await send_promotion()
-    return {"statusCode": 200, "body": json.dumps({"ok": True})}
+    # Send message to group via Telegram Bot API
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    resp = req.post(
+        url,
+        json={
+            "chat_id": GROUP_CHAT_ID,
+            "text": text,
+            "parse_mode": "HTML"
+        },
+        timeout=10
+    )
+
+    return jsonify({"ok": resp.ok})
