@@ -1,13 +1,11 @@
 import os, json, random, requests as req
-from flask import Flask, jsonify
 
-# ---------- TERI DETAILS (HARDCODED) ----------
 BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
-# ---------- KV Helper (Redis se data padhne ke liye) ----------
+# ---------- KV Helper ----------
 def kv_get(key):
     if not UPSTASH_URL:
         return None
@@ -20,7 +18,7 @@ def kv_get(key):
     except:
         return None
 
-# ---------- PLAYER NAMES (wahi 1000+ mixed names) ----------
+# ---------- Player Names ----------
 PLAYER_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas",
     "Charles", "Christopher", "Daniel", "Matthew", "Anthony", "Mark", "Donald", "Steven", "Paul",
@@ -62,30 +60,36 @@ PLAYER_NAMES = [
     "Bushra", "Souad", "Asma", "Khadeeja", "Mariam", "Aya", "Ruba", "Shireen"
 ]
 
-# ---------- FLASK APP ----------
-app = Flask(__name__)
-
-@app.route("/", methods=["GET"])
-def promote():
-    # Check GROUP_CHAT_ID
+# ---------- Vercel Handler ----------
+def handler(request):
+    # Check environment variable
     if not GROUP_CHAT_ID:
-        return jsonify({"error": "GROUP_CHAT_ID not set"}), 500
+        return {
+            "statusCode": 500,
+            "body": json.dumps({"error": "GROUP_CHAT_ID not set"})
+        }
 
-    # Get official bots config from Redis
+    # Get official bots
     data = kv_get("official_bots")
     if not data:
-        return jsonify({"ok": True, "message": "No official bots"})
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"ok": True, "message": "No official bots"})
+        }
 
     bots = json.loads(data)
     if not bots:
-        return jsonify({"ok": True, "message": "No bots configured"})
+        return {
+            "statusCode": 200,
+            "body": json.dumps({"ok": True, "message": "No bots configured"})
+        }
 
     # Pick random bot and player
     bot_config = random.choice(bots)
     player = random.choice(PLAYER_NAMES)
     amount = round(random.uniform(100, 5000), 2)
 
-    # Prepare promotional message
+    # Promotional message text
     text = (
         f"🔥💎 <b>{bot_config['name']}</b> 💎🔥\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -96,7 +100,7 @@ def promote():
         f"<i>1000+ players earning daily!</i>"
     )
 
-    # Send message to group via Telegram Bot API
+    # Send via Telegram API
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     resp = req.post(
         url,
@@ -108,4 +112,7 @@ def promote():
         timeout=10
     )
 
-    return jsonify({"ok": resp.ok})
+    return {
+        "statusCode": 200,
+        "body": json.dumps({"ok": resp.ok, "telegram_status": resp.status_code})
+    }
