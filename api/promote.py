@@ -1,5 +1,4 @@
-import os, json, random, requests as req
-import asyncio
+import os, json, random, requests as req, asyncio
 
 BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
@@ -7,7 +6,8 @@ UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
 def kv_get(key):
-    if not UPSTASH_URL: return None
+    if not UPSTASH_URL:
+        return None
     url = f"{UPSTASH_URL}/get/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
     try:
@@ -16,6 +16,17 @@ def kv_get(key):
         return data.get("result")
     except:
         return None
+
+def kv_set(key, value):
+    if not UPSTASH_URL:
+        return
+    url = f"{UPSTASH_URL}/set/{key}"
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+    try:
+        # 👇 Raw string body bhejna hai, JSON array nahi
+        req.post(url, headers=headers, data=value, timeout=5)
+    except:
+        pass
 
 PLAYER_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas",
