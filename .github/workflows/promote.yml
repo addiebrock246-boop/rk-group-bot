@@ -1,0 +1,12 @@
+name: RK Group Promotion
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # har 30 min
+  workflow_dispatch:          # manual trigger ke liye (optional)
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call promote endpoint
+        run: curl -X GET "https://rk-group-bot.vercel.app/api/promote"
