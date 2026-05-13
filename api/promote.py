@@ -5,10 +5,8 @@ GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
 UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
 
-# ---------- KV Helper ----------
 def kv_get(key):
-    if not UPSTASH_URL:
-        return None
+    if not UPSTASH_URL: return None
     url = f"{UPSTASH_URL}/get/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
     try:
@@ -18,7 +16,7 @@ def kv_get(key):
     except:
         return None
 
-# ---------- Player Names ----------
+# Poori player name list (wahi 1000+ names)
 PLAYER_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas",
     "Charles", "Christopher", "Daniel", "Matthew", "Anthony", "Mark", "Donald", "Steven", "Paul",
@@ -60,36 +58,22 @@ PLAYER_NAMES = [
     "Bushra", "Souad", "Asma", "Khadeeja", "Mariam", "Aya", "Ruba", "Shireen"
 ]
 
-# ---------- Vercel Handler ----------
 def handler(request):
-    # Check environment variable
     if not GROUP_CHAT_ID:
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"error": "GROUP_CHAT_ID not set"})
-        }
+        return {"statusCode": 500, "body": "GROUP_CHAT_ID not set"}
 
-    # Get official bots
     data = kv_get("official_bots")
     if not data:
-        return {
-            "statusCode": 200,
-            "body": json.dumps({"ok": True, "message": "No official bots"})
-        }
+        return {"statusCode": 200, "body": json.dumps({"message": "No official bots"})}
 
     bots = json.loads(data)
     if not bots:
-        return {
-            "statusCode": 200,
-            "body": json.dumps({"ok": True, "message": "No bots configured"})
-        }
+        return {"statusCode": 200, "body": json.dumps({"message": "No bots configured"})}
 
-    # Pick random bot and player
     bot_config = random.choice(bots)
     player = random.choice(PLAYER_NAMES)
     amount = round(random.uniform(100, 5000), 2)
 
-    # Promotional message text
     text = (
         f"🔥💎 <b>{bot_config['name']}</b> 💎🔥\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
@@ -100,19 +84,7 @@ def handler(request):
         f"<i>1000+ players earning daily!</i>"
     )
 
-    # Send via Telegram API
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    resp = req.post(
-        url,
-        json={
-            "chat_id": GROUP_CHAT_ID,
-            "text": text,
-            "parse_mode": "HTML"
-        },
-        timeout=10
-    )
+    req.post(url, json={"chat_id": GROUP_CHAT_ID, "text": text, "parse_mode": "HTML"}, timeout=10)
 
-    return {
-        "statusCode": 200,
-        "body": json.dumps({"ok": resp.ok, "telegram_status": resp.status_code})
-    }
+    return {"statusCode": 200, "body": json.dumps({"ok": True})}
