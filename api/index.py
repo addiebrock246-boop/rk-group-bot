@@ -30,6 +30,13 @@ def kv_set(key, value):
     if resp.status_code != 200:
         raise Exception(f"KV SET failed: {resp.status_code} {resp.text}")
 
+def kv_delete(key):
+    if not UPSTASH_URL:
+        return
+    url = f"{UPSTASH_URL}/del/{key}"
+    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
+    req.get(url, headers=headers, timeout=5)  # ignore errors
+
 # ---------- Bot Config ----------
 def get_official_bot_links():
     try:
@@ -53,25 +60,19 @@ async def add_bot_to_config(name, username, link, currency):
     kv_set("official_bots", json.dumps(bots))
 
 async def delete_bot_by_index(index):
-    try:
-        data = kv_get("official_bots")
-        if data:
-            bots = json.loads(data)
-            if 0 <= index < len(bots):
-                del bots[index]
-                kv_set("official_bots", json.dumps(bots))
-                return True
-    except Exception as e:
-        raise e
+    data = kv_get("official_bots")
+    if data:
+        bots = json.loads(data)
+        if 0 <= index < len(bots):
+            del bots[index]
+            kv_set("official_bots", json.dumps(bots))
+            return True
     return False
 
 async def list_bots():
-    try:
-        data = kv_get("official_bots")
-        if data:
-            return json.loads(data)
-    except:
-        pass
+    data = kv_get("official_bots")
+    if data:
+        return json.loads(data)
     return []
 
 # ---------- GROUP HANDLERS ----------
@@ -134,44 +135,72 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(
                 "✅ Authenticated.\n"
                 "📋 Commands:\n"
-                "/add - Add a new bot\n"
+                "/add - Add a new bot (multi‑step)\n"
                 "/list - List all bots\n"
                 "/delete <index> - Remove a bot\n"
                 "/reset - Clear authentication\n"
-                "/debug - Test KV connection"
+                "/debug - Test KV connection\n"
+                "/cancel - Cancel current add session"
             )
         else:
             await msg.reply_text("Incorrect password.")
         return
 
-    # Already authenticated
-    if text.startswith("/add"):
-        await msg.reply_text("Send bot name:")
-        context.user_data["add_step"] = "name"
-    elif "add_step" in context.user_data:
-        step = context.user_data["add_step"]
+    # Check for active add session in KV
+    state_key = f"add_state:{user.id}"
+    add_state_json = kv_get(state_key)
+    if add_state_json:
+        try:
+            state = json.loads(add_state_json)
+        except:
+            state = None
+    else:
+        state = None
+
+    # /cancel during add session
+    if text == "/cancel" and state:
+        kv_delete(state_key)
+        await msg.reply_text("🚫 Add session cancelled.")
+        return
+
+    # If we have an active add session, handle that step
+    if state:
+        step = state.get("step")
+        data = state.get("data", {})
+
         if step == "name":
-            context.user_data["new_bot"] = {"name": text}
-            context.user_data["add_step"] = "username"
+            data["name"] = text
+            state["step"] = "username"
+            kv_set(state_key, json.dumps(state))
             await msg.reply_text("Send bot username (without @):")
         elif step == "username":
-            context.user_data["new_bot"]["username"] = text
-            context.user_data["add_step"] = "link"
+            data["username"] = text
+            state["step"] = "link"
+            kv_set(state_key, json.dumps(state))
             await msg.reply_text("Send bot link (e.g., https://t.me/YourBot):")
         elif step == "link":
-            context.user_data["new_bot"]["link"] = text
-            context.user_data["add_step"] = "currency"
+            data["link"] = text
+            state["step"] = "currency"
+            kv_set(state_key, json.dumps(state))
             await msg.reply_text("Send currency (e.g., USDT, INR, BNB):")
         elif step == "currency":
-            context.user_data["new_bot"]["currency"] = text
-            bot = context.user_data["new_bot"]
+            data["currency"] = text
             try:
-                await add_bot_to_config(bot["name"], bot["username"], bot["link"], bot["currency"])
+                await add_bot_to_config(data["name"], data["username"], data["link"], data["currency"])
                 await msg.reply_text("✅ Bot added successfully!")
             except Exception as e:
                 await msg.reply_text(f"❌ Failed to save bot: {str(e)}")
-            context.user_data.pop("add_step", None)
-            context.user_data.pop("new_bot", None)
+            kv_delete(state_key)  # remove state
+        return
+
+    # No active session, handle commands
+    if text.startswith("/add"):
+        # Start new add session
+        state = {"step": "name", "data": {}}
+        kv_set(state_key, json.dumps(state))
+        await msg.reply_text("Send bot name:")
+        return
+
     elif text.startswith("/list"):
         try:
             bots = await list_bots()
@@ -185,17 +214,26 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for i, bot in enumerate(bots):
                 resp += f"{i+1}. {bot['name']} (@{bot['username']}) - {bot['currency']}\n"
             await msg.reply_html(resp)
+
     elif text.startswith("/delete"):
-        try:
-            idx = int(text.split()[1]) - 1
-            if await delete_bot_by_index(idx):
-                await msg.reply_text("✅ Bot deleted.")
-            else:
-                await msg.reply_text("Invalid index.")
-        except Exception as e:
-            await msg.reply_text(f"Error: {str(e)}")
+        parts = text.split()
+        if len(parts) == 2:
+            try:
+                idx = int(parts[1]) - 1
+                if await delete_bot_by_index(idx):
+                    await msg.reply_text("✅ Bot deleted.")
+                else:
+                    await msg.reply_text("Invalid index.")
+            except Exception as e:
+                await msg.reply_text(f"Error: {str(e)}")
+        else:
+            await msg.reply_text("Usage: /delete <index>")
+
     else:
-        await msg.reply_text("Unknown command. Use /add, /list, /delete, /reset, /debug.")
+        await msg.reply_text(
+            "Unknown command.\n"
+            "Available: /add, /list, /delete <index>, /reset, /debug, /cancel"
+        )
 
 # ---------- FLASK (fresh Application per request) ----------
 app = Flask(__name__)
@@ -206,7 +244,6 @@ def webhook():
     asyncio.set_event_loop(loop)
     try:
         data = request.get_json()
-        # Create fresh Application instance
         application = Application.builder().token(BOT_TOKEN).build()
         application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
         application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
