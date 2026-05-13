@@ -1,8 +1,7 @@
-import os, json, random, requests as req
+import os, json, random, requests as req, asyncio
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
-import asyncio
 
 BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
@@ -27,7 +26,6 @@ def kv_set(key, value):
         raise Exception("UPSTASH_REDIS_REST_URL not set")
     url = f"{UPSTASH_URL}/set/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    # 👇 Raw string body bhejna hai, JSON array nahi
     resp = req.post(url, headers=headers, data=value, timeout=5)
     if resp.status_code != 200:
         raise Exception(f"KV SET failed: {resp.status_code} {resp.text}")
@@ -199,27 +197,26 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await msg.reply_text("Unknown command. Use /add, /list, /delete, /reset, /debug.")
 
-# ---------- FLASK ----------
+# ---------- FLASK (fresh Application per request) ----------
 app = Flask(__name__)
-application = Application.builder().token(BOT_TOKEN).build()
-application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
-
-initialized = False
 
 @app.route("/api", methods=["POST"])
 def webhook():
-    global initialized
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    data = request.get_json()
-    if data:
-        if not initialized:
-            loop.run_until_complete(application.initialize())
-            initialized = True
+    try:
+        data = request.get_json()
+        # Create fresh Application instance
+        application = Application.builder().token(BOT_TOKEN).build()
+        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
+        application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
+        loop.run_until_complete(application.initialize())
         update = Update.de_json(data, application.bot)
         loop.run_until_complete(application.process_update(update))
-    return jsonify({"ok": True})
+        loop.run_until_complete(application.shutdown())
+        return jsonify({"ok": True})
+    finally:
+        loop.close()
 
 def handler(request):
     return app(request.environ, start_response)
