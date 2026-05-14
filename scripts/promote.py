@@ -1,12 +1,11 @@
 import os, json, random, requests
 
-# ---------- Ye values GitHub Secrets se aayengi ----------
+# ---------- GitHub Secrets se values ----------
 UPSTASH_URL = os.environ["UPSTASH_REDIS_REST_URL"]
 UPSTASH_TOKEN = os.environ["UPSTASH_REDIS_REST_TOKEN"]
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROUP_CHAT_ID = os.environ["GROUP_CHAT_ID"]
 
-# ---------- Redis se data padhne ka function ----------
 def kv_get(key):
     url = f"{UPSTASH_URL}/get/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
@@ -15,7 +14,7 @@ def kv_get(key):
         return resp.json().get("result")
     return None
 
-# ---------- Poori 1000+ player names list ----------
+# ---------- 1000+ Player Names ----------
 PLAYER_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas",
     "Charles", "Christopher", "Daniel", "Matthew", "Anthony", "Mark", "Donald", "Steven", "Paul",
@@ -73,7 +72,6 @@ PLAYER_NAMES = [
     "Miriam", "Fiona", "Gracie", "Juliette", "Rose", "Rebecca", "Michelle", "Ryleigh"
 ]
 
-# ---------- Main job ----------
 def main():
     if not GROUP_CHAT_ID:
         print("GROUP_CHAT_ID not set")
@@ -91,7 +89,7 @@ def main():
 
     bot_config = random.choice(bots)
     player = random.choice(PLAYER_NAMES)
-    amount = round(random.uniform(100, 5000), 2)
+    amount = round(random.uniform(1000, 5000), 2)
 
     text = (
         f"🔥💎 <b>{bot_config['name']}</b> 💎🔥\n"
