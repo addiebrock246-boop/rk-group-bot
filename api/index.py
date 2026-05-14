@@ -6,10 +6,10 @@ from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filt
 BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
-UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "")
-UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "")
+UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "https://welcomed-flounder-86019.upstash.io")
+UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "gQAAAAAAAVADAAIgcDE3ZmI1NTk4N2VmMTM0ZTExOWJiNDk5NTNmNjRkMWM1Yg")
 
-# ---------- KV Helpers (Upstash REST API) ----------
+# ---------- KV Helpers ----------
 def kv_get(key):
     if not UPSTASH_URL:
         raise Exception("UPSTASH_REDIS_REST_URL not set")
@@ -18,8 +18,7 @@ def kv_get(key):
     resp = req.get(url, headers=headers, timeout=5)
     if resp.status_code != 200:
         raise Exception(f"KV GET failed: {resp.status_code} {resp.text}")
-    data = resp.json()
-    return data.get("result")
+    return resp.json().get("result")
 
 def kv_set(key, value):
     if not UPSTASH_URL:
@@ -69,16 +68,20 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text = (
                 "👋 <b>Welcome, {}</b>!\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
-                "🎰 <b>PLAY OUR RK GAMES</b>\n"
+                "🎰 <b>PLAY OUR RK OFFICIAL GAMES</b>\n"
                 "No official games yet.\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             ).format(member.mention_html())
         else:
-            lines = [f"👉 <b>{bot['name']}</b> (@{bot['username']}) — {bot['currency']}  <a href='{bot['link']}'>Play</a>" for bot in bots]
+            lines = []
+            for bot in bots:
+                # Updated line with ONLY currency IS SUPPORTED
+                line = f"👉 <b>{bot['name']}</b> (@{bot['username']}) — ONLY {bot['currency']} IS SUPPORTED  <a href='{bot['link']}'>Play</a>"
+                lines.append(line)
             text = (
                 "👋 <b>Welcome, {}</b>!\n"
                 "━━━━━━━━━━━━━━━━━━━━\n"
-                "🎰 <b>PLAY OUR RK GAMES</b>\n"
+                "🎰 <b>PLAY OUR RK OFFICIAL GAMES</b>\n"
                 "{}\n"
                 "━━━━━━━━━━━━━━━━━━━━"
             ).format(member.mention_html(), "\n".join(lines))
@@ -215,10 +218,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Select a bot to delete:", reply_markup=reply_markup)
 
     else:
-        await msg.reply_text(
-            "Unknown command.\n"
-            "Available: /add, /list, /delete, /reset, /debug, /cancel"
-        )
+        await msg.reply_text("Unknown command. Use /add, /list, /delete, /reset, /debug, /cancel.")
 
 # ---------- CALLBACK QUERY HANDLER ----------
 async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -232,7 +232,6 @@ async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.edit_message_text("Delete cancelled.", chat_id=chat_id, message_id=message_id)
         return
 
-    # Parse index
     try:
         idx = int(data.split("_")[1])
     except:
@@ -247,7 +246,7 @@ async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await context.bot.edit_message_text(f"Error: {str(e)}", chat_id=chat_id, message_id=message_id)
 
-# ---------- FLASK (fresh Application per request) ----------
+# ---------- FLASK ----------
 app = Flask(__name__)
 
 @app.route("/api", methods=["POST"])
