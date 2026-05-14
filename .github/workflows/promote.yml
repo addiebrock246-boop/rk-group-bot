@@ -1,7 +1,8 @@
 name: RK Group Promotion
 on:
   schedule:
-    - cron: '*/30 * * * *'
+    # 👇 Indian time 12 PM, 1:30 PM, 3 PM, 4:30 PM = UTC 6:30, 8:00, 9:30, 11:00
+    - cron: '30 6,8,9,11 * * *'
   workflow_dispatch:
 
 jobs:
