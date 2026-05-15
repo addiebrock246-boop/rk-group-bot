@@ -181,7 +181,8 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kv_set(f"knock_state:{user.id}", "waiting")
             await msg.reply_text(
                 "🔨 Send the @username, numeric ID, or <b>forward any message</b> from the user/bot you want to remove.\n"
-                "✨ If you send a @username, I'll show you the numeric ID and a <b>Remove</b> button.",
+                "✨ If you send a @username, I'll show you the numeric ID and a <b>Remove</b> button.\n"
+                "💡 If I can't find the username, simply <b>forward a message</b> from that person – it always works!",
                 parse_mode="HTML"
             )
             return
@@ -192,13 +193,14 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(
                 "🌱 Send the @username or numeric ID of the user/bot you want to <b>add</b> to the group.\n"
                 "⚠️ The user must have a public username (or you know their numeric ID) and must not have privacy settings that block additions.\n"
-                "✨ If you send a @username, I'll show the numeric ID and an <b>Add</b> button.",
+                "✨ If you send a @username, I'll show the numeric ID and an <b>Add</b> button.\n"
+                "💡 If I can't find the username, <b>forward any message</b> from that person – it always works!",
                 parse_mode="HTML"
             )
             return
 
         # ============ ACTIVE SESSIONS ============
-        # Knock session (hybrid)
+        # Knock session (improved username fallback)
         knock_state = kv_get(f"knock_state:{user.id}")
         if knock_state:
             kv_delete(f"knock_state:{user.id}")
@@ -236,10 +238,13 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat = await context.bot.get_chat(username)
                         target_id = chat.id
                         target_label = username
-                    except Exception as e:
+                    except Exception:
+                        # Username not found → ask to forward a message
+                        kv_set(f"knock_state:{user.id}", "waiting")
                         await msg.reply_text(
-                            f"❌ Could not resolve username '{username}'.\n"
-                            "👉 Make sure the username exists and try again."
+                            f"❌ I couldn't find the user '{username}'.\n"
+                            "👉 Please <b>forward any message</b> from that user to me – I'll extract the ID automatically.",
+                            parse_mode="HTML"
                         )
                         return
 
@@ -267,7 +272,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
             return
 
-        # Grow session (SAME LOGIC AS KNOCK)
+        # Grow session (improved username fallback)
         grow_state = kv_get(f"grow_state:{user.id}")
         if grow_state:
             kv_delete(f"grow_state:{user.id}")
@@ -305,10 +310,13 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat = await context.bot.get_chat(username)
                         target_id = chat.id
                         target_label = username
-                    except Exception as e:
+                    except Exception:
+                        # Username not found → ask to forward a message
+                        kv_set(f"grow_state:{user.id}", "waiting")
                         await msg.reply_text(
-                            f"❌ Could not resolve username '{username}'.\n"
-                            "👉 Make sure the username exists and try again."
+                            f"❌ I couldn't find the user '{username}'.\n"
+                            "👉 Please <b>forward any message</b> from that user to me – I'll extract the ID automatically.",
+                            parse_mode="HTML"
                         )
                         return
 
@@ -335,7 +343,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await msg.reply_text("❌ Bot does not have 'Add users' permission.")
                         return
 
-                    # 🔥 chat_id को int में बदलना मत भूलना
+                    # Direct add with correct chat_id type
                     resp = req.post(
                         f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
                         json={"chat_id": int(GROUP_CHAT_ID), "user_id": target_id},
@@ -346,7 +354,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
                     else:
                         error_msg = data.get("description", resp.text)
-                        # Fallback: create invite link
+                        # Fallback: create invite link if direct add fails
                         if "Not Found" in error_msg or "USER_PRIVACY_RESTRICTED" in error_msg:
                             try:
                                 invite_link = await context.bot.create_chat_invite_link(
@@ -490,7 +498,6 @@ async def knock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             chat_id=chat_id, message_id=message_id
         )
 
-# 🆕 Callback for ADD – with fallback to invite link (chat_id fixed)
 async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -522,7 +529,7 @@ async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.edit_message_text("❌ Bot does not have 'Add users' permission.", chat_id=chat_id, message_id=message_id)
             return
 
-        # Direct add with proper chat_id (int)
+        # Direct add with correct chat_id type
         resp = req.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
             json={"chat_id": int(GROUP_CHAT_ID), "user_id": target_id},
@@ -536,7 +543,7 @@ async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
         else:
             error_msg = data.get("description", resp.text)
-            # Fallback: create invite link if user can't be added directly
+            # Fallback: create invite link if direct add fails
             if "Not Found" in error_msg or "USER_PRIVACY_RESTRICTED" in error_msg:
                 try:
                     invite_link = await context.bot.create_chat_invite_link(
