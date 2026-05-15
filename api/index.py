@@ -9,7 +9,7 @@ GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
 UPSTASH_URL = os.environ["UPSTASH_REDIS_REST_URL"]
 UPSTASH_TOKEN = os.environ["UPSTASH_REDIS_REST_TOKEN"]
 
-# ---------- KV ----------
+# ---------- KV Helpers ----------
 def kv_get(key):
     url = f"{UPSTASH_URL}/get/{key}"
     headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
@@ -116,7 +116,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "/list - List all bots\n"
                     "/delete - Delete bots (inline buttons)\n"
                     "/transfer - Send a message to the group\n"
-                    "/memberknock - Remove a member (or any bot) by @username, numeric ID, or forward\n"
+                    "/memberknock - Remove a member (or any bot)\n"
                     "/reset - Clear authentication\n"
                     "/debug - Test KV connection\n"
                     "/cancel - Cancel any session"
@@ -179,13 +179,14 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if text.startswith("/memberknock"):
             kv_set(f"knock_state:{user.id}", "waiting")
             await msg.reply_text(
-                "🔨 Send the @username, numeric ID, or <b>forward any message</b> from the user/bot you want to remove.",
+                "🔨 Send the @username, numeric ID, or <b>forward any message</b> from the user/bot you want to remove.\n"
+                "✨ If you send a @username, I'll show you the numeric ID and a <b>Remove</b> button.",
                 parse_mode="HTML"
             )
             return
 
         # ============ ACTIVE SESSIONS ============
-        # Knock session (fixed)
+        # Knock session (hybrid: forward, numeric ID, @username with inline button)
         knock_state = kv_get(f"knock_state:{user.id}")
         if knock_state:
             kv_delete(f"knock_state:{user.id}")
@@ -193,7 +194,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
                 return
 
-            # Safely get forward attributes
             forward_from = getattr(msg, 'forward_from', None)
             forward_from_chat = getattr(msg, 'forward_from_chat', None)
             target_id = None
@@ -221,31 +221,45 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await msg.reply_text("❌ Invalid numeric ID.")
                         return
                 else:
+                    # 3) Assume @username (with or without @)
                     username = text_input if text_input.startswith('@') else '@' + text_input
                     try:
-                        member = await context.bot.get_chat_member(GROUP_CHAT_ID, username)
-                        target_id = member.user.id
+                        # 🔥 Resolve username to numeric ID globally (works even if not in group)
+                        chat = await context.bot.get_chat(username)
+                        target_id = chat.id
                         target_label = username
                     except Exception as e:
-                        kv_set(f"knock_state:{user.id}", "waiting")
                         await msg.reply_text(
-                            f"❌ Could not find '{username}' in the group.\n"
-                            "👉 Please <b>forward any message</b> from that user to me, and I'll extract the ID automatically.",
-                            parse_mode="HTML"
+                            f"❌ Could not resolve username '{username}'.\n"
+                            "👉 Make sure the username exists and try again.\n"
+                            "💡 Alternatively, you can forward a message from that user."
                         )
                         return
 
-            # Kick
-            try:
-                bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
-                if bot_member.status not in ("administrator", "creator"):
-                    await msg.reply_text("❌ Bot is not an admin of the group.")
+                    # If we successfully resolved, show the ID with a "Remove" button
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🗑️ Remove from group", callback_data=f"knock_confirm_{target_id}")]
+                    ])
+                    await msg.reply_text(
+                        f"✅ Username <b>{username}</b> → Numeric ID: <code>{target_id}</code>\n\n"
+                        "Click the button below to <b>remove</b> this user from the group.",
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
                     return
-                await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
-                await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
-                await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been removed from the group.")
-            except Exception as e:
-                await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
+
+            # Direct removal (for numeric ID or forward)
+            if target_id:
+                try:
+                    bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
+                    if bot_member.status not in ("administrator", "creator"):
+                        await msg.reply_text("❌ Bot is not an admin of the group.")
+                        return
+                    await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
+                    await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
+                    await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been removed from the group.")
+                except Exception as e:
+                    await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
             return
 
         # Transfer session
@@ -307,7 +321,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ---------- Callback ----------
+# ---------- CALLBACK HANDLERS ----------
 async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -330,7 +344,49 @@ async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await context.bot.edit_message_text(f"Error: {str(e)}", chat_id=chat_id, message_id=message_id)
 
-# ---------- Flask ----------
+# 🆕 Callback for confirming member removal (after username resolve)
+async def knock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    chat_id = query.message.chat_id
+    message_id = query.message.message_id
+
+    # Extract target_id from callback_data (format: knock_confirm_<user_id>)
+    parts = data.split("_")
+    if len(parts) >= 3:
+        try:
+            target_id = int(parts[2])
+        except ValueError:
+            await context.bot.edit_message_text("❌ Invalid user ID.", chat_id=chat_id, message_id=message_id)
+            return
+    else:
+        await context.bot.edit_message_text("❌ Invalid callback.", chat_id=chat_id, message_id=message_id)
+        return
+
+    if not GROUP_CHAT_ID:
+        await context.bot.edit_message_text("❌ GROUP_CHAT_ID is not set.", chat_id=chat_id, message_id=message_id)
+        return
+
+    try:
+        bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
+        if bot_member.status not in ("administrator", "creator"):
+            await context.bot.edit_message_text("❌ Bot is not an admin of the group.", chat_id=chat_id, message_id=message_id)
+            return
+
+        await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
+        await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
+        await context.bot.edit_message_text(
+            f"✅ User (ID: <code>{target_id}</code>) has been <b>removed</b> from the group.",
+            chat_id=chat_id, message_id=message_id, parse_mode="HTML"
+        )
+    except Exception as e:
+        await context.bot.edit_message_text(
+            f"❌ Failed to remove member: {str(e)}",
+            chat_id=chat_id, message_id=message_id
+        )
+
+# ---------- FLASK ----------
 app = Flask(__name__)
 
 @app.route("/api", methods=["POST"])
@@ -343,6 +399,7 @@ def webhook():
         application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
         application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
         application.add_handler(CallbackQueryHandler(delete_callback, pattern=r"^del_"))
+        application.add_handler(CallbackQueryHandler(knock_confirm_callback, pattern=r"^knock_confirm_"))
         loop.run_until_complete(application.initialize())
         update = Update.de_json(data, application.bot)
         loop.run_until_complete(application.process_update(update))
