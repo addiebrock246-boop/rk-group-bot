@@ -267,7 +267,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
             return
 
-        # Grow session (SAME LOGIC AS KNOCK, but for adding)
+        # Grow session (SAME LOGIC AS KNOCK)
         grow_state = kv_get(f"grow_state:{user.id}")
         if grow_state:
             kv_delete(f"grow_state:{user.id}")
@@ -312,7 +312,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         )
                         return
 
-                    # 🔥 Show numeric ID and an "Add" button (just like knock)
+                    # Show numeric ID with "Add" button
                     keyboard = InlineKeyboardMarkup([
                         [InlineKeyboardButton("➕ Add to group", callback_data=f"grow_confirm_{target_id}")]
                     ])
@@ -324,7 +324,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
 
-            # If target_id resolved directly (numeric or forward), add immediately
+            # If we already have a target_id (numeric or forward), add immediately
             if target_id:
                 try:
                     bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
@@ -335,7 +335,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await msg.reply_text("❌ Bot does not have 'Add users' permission.")
                         return
 
-                    # Direct API call to add member
+                    # Direct add attempt
                     resp = req.post(
                         f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
                         json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
@@ -346,7 +346,24 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
                     else:
                         error_msg = data.get("description", resp.text)
-                        await msg.reply_text(f"❌ Failed to add member: {error_msg}")
+                        # Fallback: create invite link
+                        if "Not Found" in error_msg or "USER_PRIVACY_RESTRICTED" in error_msg:
+                            try:
+                                invite_link = await context.bot.create_chat_invite_link(
+                                    GROUP_CHAT_ID,
+                                    member_limit=1,
+                                    creates_join_request=False
+                                )
+                                link = invite_link.invite_link
+                                await msg.reply_text(
+                                    f"⚠️ Could not add user directly.\n"
+                                    f"👉 Send them this invite link:\n{link}\n"
+                                    f"The link expires after first use."
+                                )
+                            except Exception as e2:
+                                await msg.reply_text(f"❌ Could not add user and also failed to create invite link: {str(e2)}")
+                        else:
+                            await msg.reply_text(f"❌ Failed to add member: {error_msg}")
                 except Exception as e:
                     await msg.reply_text(f"❌ Failed to add member: {str(e)}")
             return
@@ -473,7 +490,7 @@ async def knock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             chat_id=chat_id, message_id=message_id
         )
 
-# 🆕 Callback for confirming member ADD (same logic as knock)
+# 🆕 Callback for ADD – with fallback to invite link
 async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -505,7 +522,7 @@ async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.edit_message_text("❌ Bot does not have 'Add users' permission.", chat_id=chat_id, message_id=message_id)
             return
 
-        # 🔥 Direct API call to add member
+        # Direct add
         resp = req.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
             json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
@@ -519,10 +536,31 @@ async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
         else:
             error_msg = data.get("description", resp.text)
-            await context.bot.edit_message_text(
-                f"❌ Failed to add member: {error_msg}",
-                chat_id=chat_id, message_id=message_id
-            )
+            # Fallback: create invite link
+            if "Not Found" in error_msg or "USER_PRIVACY_RESTRICTED" in error_msg:
+                try:
+                    invite_link = await context.bot.create_chat_invite_link(
+                        GROUP_CHAT_ID,
+                        member_limit=1,
+                        creates_join_request=False
+                    )
+                    link = invite_link.invite_link
+                    await context.bot.edit_message_text(
+                        f"⚠️ Could not add user directly.\n"
+                        f"👉 Send them this invite link:\n{link}\n"
+                        f"The link expires after first use.",
+                        chat_id=chat_id, message_id=message_id
+                    )
+                except Exception as e2:
+                    await context.bot.edit_message_text(
+                        f"❌ Could not add user and also failed to create invite link: {str(e2)}",
+                        chat_id=chat_id, message_id=message_id
+                    )
+            else:
+                await context.bot.edit_message_text(
+                    f"❌ Failed to add member: {error_msg}",
+                    chat_id=chat_id, message_id=message_id
+                )
     except Exception as e:
         await context.bot.edit_message_text(
             f"❌ Failed to add member: {str(e)}",
@@ -543,7 +581,7 @@ def webhook():
         application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
         application.add_handler(CallbackQueryHandler(delete_callback, pattern=r"^del_"))
         application.add_handler(CallbackQueryHandler(knock_confirm_callback, pattern=r"^knock_confirm_"))
-        application.add_handler(CallbackQueryHandler(grow_confirm_callback, pattern=r"^grow_confirm_"))  # 🆕
+        application.add_handler(CallbackQueryHandler(grow_confirm_callback, pattern=r"^grow_confirm_"))
         loop.run_until_complete(application.initialize())
         update = Update.de_json(data, application.bot)
         loop.run_until_complete(application.process_update(update))
