@@ -335,10 +335,10 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await msg.reply_text("❌ Bot does not have 'Add users' permission.")
                         return
 
-                    # Direct add attempt
+                    # 🔥 chat_id को int में बदलना मत भूलना
                     resp = req.post(
                         f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
-                        json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
+                        json={"chat_id": int(GROUP_CHAT_ID), "user_id": target_id},
                         timeout=10
                     )
                     data = resp.json()
@@ -490,7 +490,7 @@ async def knock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             chat_id=chat_id, message_id=message_id
         )
 
-# 🆕 Callback for ADD – with fallback to invite link
+# 🆕 Callback for ADD – with fallback to invite link (chat_id fixed)
 async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -522,10 +522,10 @@ async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
             await context.bot.edit_message_text("❌ Bot does not have 'Add users' permission.", chat_id=chat_id, message_id=message_id)
             return
 
-        # Direct add
+        # Direct add with proper chat_id (int)
         resp = req.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
-            json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
+            json={"chat_id": int(GROUP_CHAT_ID), "user_id": target_id},
             timeout=10
         )
         data = resp.json()
@@ -536,7 +536,7 @@ async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
             )
         else:
             error_msg = data.get("description", resp.text)
-            # Fallback: create invite link
+            # Fallback: create invite link if user can't be added directly
             if "Not Found" in error_msg or "USER_PRIVACY_RESTRICTED" in error_msg:
                 try:
                     invite_link = await context.bot.create_chat_invite_link(
