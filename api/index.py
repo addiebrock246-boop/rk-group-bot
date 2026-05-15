@@ -75,7 +75,6 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             lines = []
             for bot in bots:
-                # Updated line with ONLY currency IS SUPPORTED
                 line = f"👉 <b>{bot['name']}</b> (@{bot['username']}) — ONLY {bot['currency']} IS SUPPORTED  <a href='{bot['link']}'>Play</a>"
                 lines.append(line)
             text = (
@@ -132,12 +131,30 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/add - Add a new bot (multi‑step)\n"
                 "/list - List all bots\n"
                 "/delete - Delete bots (inline buttons)\n"
+                "/transfer - Send a message to the group\n"
                 "/reset - Clear authentication\n"
                 "/debug - Test KV connection\n"
-                "/cancel - Cancel current add session"
+                "/cancel - Cancel current add/transfer session"
             )
         else:
             await msg.reply_text("Incorrect password.")
+        return
+
+    # Check for active transfer session
+    transfer_key = f"transfer_state:{user.id}"
+    transfer_state_json = kv_get(transfer_key)
+    if transfer_state_json:
+        # Owner replied with the message to be forwarded
+        message_to_send = text  # entire text is the message
+        kv_delete(transfer_key)
+        if GROUP_CHAT_ID:
+            try:
+                await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=message_to_send)
+                await msg.reply_text("✅ Message sent to the group.")
+            except Exception as e:
+                await msg.reply_text(f"❌ Failed to send message: {str(e)}")
+        else:
+            await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
         return
 
     # Check for active add session in KV
@@ -151,10 +168,13 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         state = None
 
-    # /cancel during add session
-    if text == "/cancel" and state:
-        kv_delete(state_key)
-        await msg.reply_text("🚫 Add session cancelled.")
+    # /cancel during any session
+    if text == "/cancel":
+        if state:
+            kv_delete(state_key)
+        if transfer_state_json:
+            kv_delete(transfer_key)
+        await msg.reply_text("🚫 Any active session cancelled.")
         return
 
     # If we have an active add session, handle that step
@@ -188,6 +208,12 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # No active session, handle commands
+    if text.startswith("/transfer"):
+        # Start transfer session
+        kv_set(transfer_key, "waiting")
+        await msg.reply_text("✉️ Please send the message you want to forward to the group.")
+        return
+
     if text.startswith("/add"):
         # Start new add session
         state = {"step": "name", "data": {}}
@@ -218,7 +244,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Select a bot to delete:", reply_markup=reply_markup)
 
     else:
-        await msg.reply_text("Unknown command. Use /add, /list, /delete, /reset, /debug, /cancel.")
+        await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /reset, /debug, /cancel.")
 
 # ---------- CALLBACK QUERY HANDLER ----------
 async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
