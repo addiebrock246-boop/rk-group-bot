@@ -1,95 +1,3 @@
-import os, json, random, requests as req, asyncio
-from flask import Flask, request, jsonify
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-
-BOT_TOKEN = "8808046020:AAEjfprJIKHe7y5TZJckjL22b2yXyM4gKfQ"
-OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
-GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
-UPSTASH_URL = os.environ.get("UPSTASH_REDIS_REST_URL", "https://welcomed-flounder-86019.upstash.io")
-UPSTASH_TOKEN = os.environ.get("UPSTASH_REDIS_REST_TOKEN", "gQAAAAAAAVADAAIgcDE3ZmI1NTk4N2VmMTM0ZTExOWJiNDk5NTNmNjRkMWM1Yg")
-
-# ---------- KV Helpers ----------
-def kv_get(key):
-    if not UPSTASH_URL:
-        raise Exception("UPSTASH_REDIS_REST_URL not set")
-    url = f"{UPSTASH_URL}/get/{key}"
-    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    resp = req.get(url, headers=headers, timeout=5)
-    if resp.status_code != 200:
-        raise Exception(f"KV GET failed: {resp.status_code} {resp.text}")
-    return resp.json().get("result")
-
-def kv_set(key, value):
-    if not UPSTASH_URL:
-        raise Exception("UPSTASH_REDIS_REST_URL not set")
-    url = f"{UPSTASH_URL}/set/{key}"
-    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    resp = req.post(url, headers=headers, data=value, timeout=5)
-    if resp.status_code != 200:
-        raise Exception(f"KV SET failed: {resp.status_code} {resp.text}")
-
-def kv_delete(key):
-    if not UPSTASH_URL:
-        return
-    url = f"{UPSTASH_URL}/del/{key}"
-    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    req.get(url, headers=headers, timeout=5)
-
-# ---------- Bot Config ----------
-def get_official_bots():
-    try:
-        data = kv_get("official_bots")
-        if data:
-            return json.loads(data)
-    except:
-        pass
-    return []
-
-async def add_bot_to_config(name, username, link, currency):
-    bots = get_official_bots()
-    bots.append({"name": name, "username": username, "link": link, "currency": currency})
-    kv_set("official_bots", json.dumps(bots))
-
-async def delete_bot_by_index(index):
-    bots = get_official_bots()
-    if 0 <= index < len(bots):
-        del bots[index]
-        kv_set("official_bots", json.dumps(bots))
-        return True
-    return False
-
-# ---------- GROUP HANDLERS ----------
-async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    for member in update.message.new_chat_members:
-        if member.is_bot: continue
-        bots = get_official_bots()
-        if not bots:
-            text = (
-                "👋 <b>Welcome, {}</b>!\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "🎰 <b>PLAY OUR RK OFFICIAL GAMES</b>\n"
-                "No official games yet.\n"
-                "━━━━━━━━━━━━━━━━━━━━"
-            ).format(member.mention_html())
-        else:
-            lines = []
-            for bot in bots:
-                line = f"👉 <b>{bot['name']}</b> (@{bot['username']}) — ONLY {bot['currency']} IS SUPPORTED  <a href='{bot['link']}'>Play</a>"
-                lines.append(line)
-            text = (
-                "👋 <b>Welcome, {}</b>!\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-                "🎰 <b>PLAY OUR RK OFFICIAL GAMES</b>\n"
-                "{}\n"
-                "━━━━━━━━━━━━━━━━━━━━"
-            ).format(member.mention_html(), "\n".join(lines))
-        await update.message.reply_html(text)
-
-# ---------- DM HANDLER (Owner Only) ----------
-DM_PASSWORD = "RISHAVBHAGWANHAI"
-authenticated_users = set()
-
 async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     user = update.effective_user
@@ -132,20 +40,50 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/list - List all bots\n"
                 "/delete - Delete bots (inline buttons)\n"
                 "/transfer - Send a message to the group\n"
+                "/memberknock - Remove a member from the group\n"
                 "/reset - Clear authentication\n"
                 "/debug - Test KV connection\n"
-                "/cancel - Cancel current add/transfer session"
+                "/cancel - Cancel current add/transfer/knock session"
             )
         else:
             await msg.reply_text("Incorrect password.")
+        return
+
+    # ---------- ACTIVE SESSION HANDLING ----------
+    # Check for knock (member remove) session
+    knock_key = f"knock_state:{user.id}"
+    knock_state = kv_get(knock_key)
+    if knock_state:
+        # Owner sent the user identifier to kick
+        target = text
+        kv_delete(knock_key)
+        if not GROUP_CHAT_ID:
+            await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
+            return
+        try:
+            # Try to resolve user ID (if it's a numeric ID or @username)
+            if target.startswith("@"):
+                # remove @
+                target_username = target[1:]
+                # Try to get chat member info (requires admin)
+                member = await context.bot.get_chat_member(GROUP_CHAT_ID, "@"+target_username)
+                target_id = member.user.id
+            else:
+                # assume it's a numeric user ID
+                target_id = int(target)
+            # Kick: ban then unban
+            await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
+            await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
+            await msg.reply_text(f"✅ Member {target} has been removed from the group.")
+        except Exception as e:
+            await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
         return
 
     # Check for active transfer session
     transfer_key = f"transfer_state:{user.id}"
     transfer_state_json = kv_get(transfer_key)
     if transfer_state_json:
-        # Owner replied with the message to be forwarded
-        message_to_send = text  # entire text is the message
+        message_to_send = text
         kv_delete(transfer_key)
         if GROUP_CHAT_ID:
             try:
@@ -174,6 +112,8 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kv_delete(state_key)
         if transfer_state_json:
             kv_delete(transfer_key)
+        if knock_state:
+            kv_delete(knock_key)
         await msg.reply_text("🚫 Any active session cancelled.")
         return
 
@@ -181,7 +121,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state:
         step = state.get("step")
         data = state.get("data", {})
-
         if step == "name":
             data["name"] = text
             state["step"] = "username"
@@ -207,15 +146,18 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kv_delete(state_key)
         return
 
-    # No active session, handle commands
+    # ---------- NO ACTIVE SESSION – HANDLE COMMANDS ----------
+    if text.startswith("/memberknock"):
+        kv_set(knock_key, "waiting")
+        await msg.reply_text("🔨 Send the user ID or @username of the member to remove from the group.")
+        return
+
     if text.startswith("/transfer"):
-        # Start transfer session
         kv_set(transfer_key, "waiting")
         await msg.reply_text("✉️ Please send the message you want to forward to the group.")
         return
 
     if text.startswith("/add"):
-        # Start new add session
         state = {"step": "name", "data": {}}
         kv_set(state_key, json.dumps(state))
         await msg.reply_text("Send bot name:")
@@ -244,54 +186,4 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Select a bot to delete:", reply_markup=reply_markup)
 
     else:
-        await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /reset, /debug, /cancel.")
-
-# ---------- CALLBACK QUERY HANDLER ----------
-async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-    chat_id = query.message.chat_id
-    message_id = query.message.message_id
-
-    if data == "del_cancel":
-        await context.bot.edit_message_text("Delete cancelled.", chat_id=chat_id, message_id=message_id)
-        return
-
-    try:
-        idx = int(data.split("_")[1])
-    except:
-        await context.bot.edit_message_text("Invalid selection.", chat_id=chat_id, message_id=message_id)
-        return
-
-    try:
-        if await delete_bot_by_index(idx):
-            await context.bot.edit_message_text("✅ Bot deleted successfully.", chat_id=chat_id, message_id=message_id)
-        else:
-            await context.bot.edit_message_text("❌ Invalid index.", chat_id=chat_id, message_id=message_id)
-    except Exception as e:
-        await context.bot.edit_message_text(f"Error: {str(e)}", chat_id=chat_id, message_id=message_id)
-
-# ---------- FLASK ----------
-app = Flask(__name__)
-
-@app.route("/api", methods=["POST"])
-def webhook():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        data = request.get_json()
-        application = Application.builder().token(BOT_TOKEN).build()
-        application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-        application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
-        application.add_handler(CallbackQueryHandler(delete_callback, pattern=r"^del_"))
-        loop.run_until_complete(application.initialize())
-        update = Update.de_json(data, application.bot)
-        loop.run_until_complete(application.process_update(update))
-        loop.run_until_complete(application.shutdown())
-        return jsonify({"ok": True})
-    finally:
-        loop.close()
-
-def handler(request):
-    return app(request.environ, start_response)
+        await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /reset, /debug, /cancel.")
