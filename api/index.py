@@ -191,7 +191,8 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kv_set(f"grow_state:{user.id}", "waiting")
             await msg.reply_text(
                 "🌱 Send the @username or numeric ID of the user/bot you want to <b>add</b> to the group.\n"
-                "⚠️ The user must have a public username (or you know their numeric ID) and must not have privacy settings that block additions.",
+                "⚠️ The user must have a public username (or you know their numeric ID) and must not have privacy settings that block additions.\n"
+                "✨ If you send a @username, I'll show the numeric ID and an <b>Add</b> button.",
                 parse_mode="HTML"
             )
             return
@@ -266,7 +267,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
             return
 
-        # Grow session (FIXED – direct API call)
+        # Grow session (SAME LOGIC AS KNOCK, but for adding)
         grow_state = kv_get(f"grow_state:{user.id}")
         if grow_state:
             kv_delete(f"grow_state:{user.id}")
@@ -274,59 +275,80 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
                 return
 
-            text_input = text.strip()
-            if not text_input:
-                await msg.reply_text("❌ No input. Send @username or numeric ID.")
-                return
-
+            forward_from = getattr(msg, 'forward_from', None)
+            forward_from_chat = getattr(msg, 'forward_from_chat', None)
             target_id = None
             target_label = ""
 
-            if text_input.lstrip('-').isdigit():
-                try:
-                    target_id = int(text_input)
-                    target_label = str(target_id)
-                except:
-                    await msg.reply_text("❌ Invalid numeric ID.")
-                    return
+            if forward_from:
+                target_id = forward_from.id
+                target_label = f"@{forward_from.username}" if forward_from.username else forward_from.full_name
+            elif forward_from_chat:
+                target_id = forward_from_chat.id
+                target_label = f"@{forward_from_chat.username}" if forward_from_chat.username else forward_from_chat.title
             else:
-                username = text_input if text_input.startswith('@') else '@' + text_input
-                try:
-                    chat = await context.bot.get_chat(username)
-                    target_id = chat.id
-                    target_label = username
-                except Exception as e:
-                    await msg.reply_text(f"❌ Could not resolve username '{username}'. Make sure it exists.")
+                text_input = text.strip()
+                if not text_input:
+                    kv_set(f"grow_state:{user.id}", "waiting")
+                    await msg.reply_text("❌ No input. Send @username, numeric ID, or forward a message.")
                     return
-
-            # Check admin rights before direct API call
-            try:
-                bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
-                if bot_member.status not in ("administrator", "creator"):
-                    await msg.reply_text("❌ Bot is not an admin of the group.")
-                    return
-                if not bot_member.can_invite_users:
-                    await msg.reply_text("❌ Bot does not have 'Add users' permission. Enable it in group admin settings.")
-                    return
-            except Exception as e:
-                await msg.reply_text(f"❌ Failed to verify bot admin rights: {str(e)}")
-                return
-
-            # 🔥 Direct Telegram API call – works with every library version
-            try:
-                resp = req.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
-                    json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
-                    timeout=10
-                )
-                data = resp.json()
-                if resp.status_code == 200 and data.get("ok"):
-                    await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
+                if text_input.lstrip('-').isdigit():
+                    try:
+                        target_id = int(text_input)
+                        target_label = text_input
+                    except:
+                        await msg.reply_text("❌ Invalid numeric ID.")
+                        return
                 else:
-                    error_msg = data.get("description", resp.text)
-                    await msg.reply_text(f"❌ Failed to add member: {error_msg}")
-            except Exception as e:
-                await msg.reply_text(f"❌ Network error: {str(e)}")
+                    username = text_input if text_input.startswith('@') else '@' + text_input
+                    try:
+                        chat = await context.bot.get_chat(username)
+                        target_id = chat.id
+                        target_label = username
+                    except Exception as e:
+                        await msg.reply_text(
+                            f"❌ Could not resolve username '{username}'.\n"
+                            "👉 Make sure the username exists and try again."
+                        )
+                        return
+
+                    # 🔥 Show numeric ID and an "Add" button (just like knock)
+                    keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("➕ Add to group", callback_data=f"grow_confirm_{target_id}")]
+                    ])
+                    await msg.reply_text(
+                        f"✅ Username <b>{username}</b> → Numeric ID: <code>{target_id}</code>\n\n"
+                        "Click the button below to <b>add</b> this user to the group.",
+                        parse_mode="HTML",
+                        reply_markup=keyboard
+                    )
+                    return
+
+            # If target_id resolved directly (numeric or forward), add immediately
+            if target_id:
+                try:
+                    bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
+                    if bot_member.status not in ("administrator", "creator"):
+                        await msg.reply_text("❌ Bot is not an admin of the group.")
+                        return
+                    if not bot_member.can_invite_users:
+                        await msg.reply_text("❌ Bot does not have 'Add users' permission.")
+                        return
+
+                    # Direct API call to add member
+                    resp = req.post(
+                        f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
+                        json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
+                        timeout=10
+                    )
+                    data = resp.json()
+                    if resp.status_code == 200 and data.get("ok"):
+                        await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
+                    else:
+                        error_msg = data.get("description", resp.text)
+                        await msg.reply_text(f"❌ Failed to add member: {error_msg}")
+                except Exception as e:
+                    await msg.reply_text(f"❌ Failed to add member: {str(e)}")
             return
 
         # Transfer session
@@ -451,6 +473,62 @@ async def knock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
             chat_id=chat_id, message_id=message_id
         )
 
+# 🆕 Callback for confirming member ADD (same logic as knock)
+async def grow_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    chat_id = query.message.chat_id
+    message_id = query.message.message_id
+
+    parts = data.split("_")
+    if len(parts) >= 3:
+        try:
+            target_id = int(parts[2])
+        except ValueError:
+            await context.bot.edit_message_text("❌ Invalid user ID.", chat_id=chat_id, message_id=message_id)
+            return
+    else:
+        await context.bot.edit_message_text("❌ Invalid callback.", chat_id=chat_id, message_id=message_id)
+        return
+
+    if not GROUP_CHAT_ID:
+        await context.bot.edit_message_text("❌ GROUP_CHAT_ID is not set.", chat_id=chat_id, message_id=message_id)
+        return
+
+    try:
+        bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
+        if bot_member.status not in ("administrator", "creator"):
+            await context.bot.edit_message_text("❌ Bot is not an admin of the group.", chat_id=chat_id, message_id=message_id)
+            return
+        if not bot_member.can_invite_users:
+            await context.bot.edit_message_text("❌ Bot does not have 'Add users' permission.", chat_id=chat_id, message_id=message_id)
+            return
+
+        # 🔥 Direct API call to add member
+        resp = req.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
+            json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
+            timeout=10
+        )
+        data = resp.json()
+        if resp.status_code == 200 and data.get("ok"):
+            await context.bot.edit_message_text(
+                f"✅ User (ID: <code>{target_id}</code>) has been <b>added</b> to the group.",
+                chat_id=chat_id, message_id=message_id, parse_mode="HTML"
+            )
+        else:
+            error_msg = data.get("description", resp.text)
+            await context.bot.edit_message_text(
+                f"❌ Failed to add member: {error_msg}",
+                chat_id=chat_id, message_id=message_id
+            )
+    except Exception as e:
+        await context.bot.edit_message_text(
+            f"❌ Failed to add member: {str(e)}",
+            chat_id=chat_id, message_id=message_id
+        )
+
 # ---------- FLASK ----------
 app = Flask(__name__)
 
@@ -465,6 +543,7 @@ def webhook():
         application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
         application.add_handler(CallbackQueryHandler(delete_callback, pattern=r"^del_"))
         application.add_handler(CallbackQueryHandler(knock_confirm_callback, pattern=r"^knock_confirm_"))
+        application.add_handler(CallbackQueryHandler(grow_confirm_callback, pattern=r"^grow_confirm_"))  # 🆕
         loop.run_until_complete(application.initialize())
         update = Update.de_json(data, application.bot)
         loop.run_until_complete(application.process_update(update))
