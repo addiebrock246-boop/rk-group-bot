@@ -1,20 +1,15 @@
-import os, json, random, requests
+import os, random, requests
 
-# ---------- GitHub Secrets se values ----------
-UPSTASH_URL = os.environ["UPSTASH_REDIS_REST_URL"]
-UPSTASH_TOKEN = os.environ["UPSTASH_REDIS_REST_TOKEN"]
+# ========== Environment Variables ==========
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GROUP_CHAT_ID = os.environ["GROUP_CHAT_ID"]
 
-def kv_get(key):
-    url = f"{UPSTASH_URL}/get/{key}"
-    headers = {"Authorization": f"Bearer {UPSTASH_TOKEN}"}
-    resp = requests.get(url, headers=headers, timeout=5)
-    if resp.status_code == 200:
-        return resp.json().get("result")
-    return None
+# ========== New Cash Mines Bot Details ==========
+BOT_NAME = "💰 CASH MINES"
+BOT_CURRENCY = "USDT"
+BOT_LINK = "https://t.me/CASHMINESOFFICIAL_BOT"
 
-# ---------- 1000+ Player Names ----------
+# ========== 1000+ Player Names (same as before) ==========
 PLAYER_NAMES = [
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas",
     "Charles", "Christopher", "Daniel", "Matthew", "Anthony", "Mark", "Donald", "Steven", "Paul",
@@ -77,26 +72,15 @@ def main():
         print("GROUP_CHAT_ID not set")
         return
 
-    data = kv_get("official_bots")
-    if not data:
-        print("No official bots in Redis")
-        return
-
-    bots = json.loads(data)
-    if not bots:
-        print("No bots configured")
-        return
-
-    bot_config = random.choice(bots)
     player = random.choice(PLAYER_NAMES)
     amount = round(random.uniform(1000, 5000), 2)
 
     text = (
-        f"🔥💎 <b>{bot_config['name']}</b> 💎🔥\n"
+        f"🔥💎 <b>{BOT_NAME}</b> 💎🔥\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎰 Player <b>{player}</b> just won <b>{amount} {bot_config['currency']}</b>!\n"
-        f"💰 Play now and earn real {bot_config['currency']}.\n"
-        f"🚀 Start: {bot_config['link']}\n"
+        f"🎰 Player <b>{player}</b> just won <b>{amount} {BOT_CURRENCY}</b>!\n"
+        f"💰 Play now and earn real {BOT_CURRENCY}.\n"
+        f"🚀 Start: {BOT_LINK}\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"<i>1000+ players earning daily!</i>"
     )
