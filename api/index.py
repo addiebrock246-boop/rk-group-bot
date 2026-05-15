@@ -3,7 +3,6 @@ from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
-# ⚠️ Environment variables se values aayengi
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
@@ -94,7 +93,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("You are not authorized.")
         return
 
-    text = msg.text.strip()
+    text = msg.text.strip() if msg.text else ""
 
     # /debug
     if text == "/debug":
@@ -129,7 +128,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/list - List all bots\n"
                 "/delete - Delete bots (inline buttons)\n"
                 "/transfer - Send a message to the group\n"
-                "/memberknock - Remove a member (or any bot) by @username or numeric ID\n"
+                "/memberknock - Remove a member (or any bot)\n"
                 "/reset - Clear authentication\n"
                 "/debug - Test KV connection\n"
                 "/cancel - Cancel current add/transfer/knock session"
@@ -194,8 +193,9 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith("/memberknock"):
         kv_set(f"knock_state:{user.id}", "waiting")
         await msg.reply_text(
-            "🔨 Send the @username or numeric user ID of the member (or bot) to remove.\n"
-            "✨ The bot will automatically convert @username to a numeric ID – no external tools needed."
+            "🔨 <b>Forward a message</b> from the user (or bot) you want to remove.\n"
+            "📩 Simply forward any of their messages here – the bot will extract the ID and kick them instantly.",
+            parse_mode="HTML"
         )
         return
 
@@ -203,46 +203,46 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ACTIVE SESSION HANDLING
     # ═══════════════════════════════════
 
-    # ── KNOCK SESSION ──
+    # ── KNOCK SESSION (forward handler) ──
     knock_state = kv_get(f"knock_state:{user.id}")
     if knock_state:
-        target = text.strip()
         kv_delete(f"knock_state:{user.id}")
 
         if not GROUP_CHAT_ID:
             await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
             return
 
-        try:
-            # 1️⃣ Convert username → numeric ID (if not already numeric)
-            if target.lstrip('-').isdigit():
-                target_id = int(target)
-                target_label = target
-            else:
-                username = target if target.startswith('@') else '@' + target
-                # Fetch the member from the group (works for humans and bots)
-                member = await context.bot.get_chat_member(GROUP_CHAT_ID, username)
-                target_id = member.user.id
-                target_label = username
+        # Extract user ID from forwarded message
+        forward_from = msg.forward_from
+        forward_from_chat = msg.forward_from_chat
 
-            # 2️⃣ Check bot admin rights
+        if forward_from:
+            target_id = forward_from.id
+            target_name = f"@{forward_from.username}" if forward_from.username else forward_from.full_name
+        elif forward_from_chat:
+            # For bots or channels, forward_from_chat contains the chat info
+            target_id = forward_from_chat.id
+            target_name = f"@{forward_from_chat.username}" if forward_from_chat.username else forward_from_chat.title
+        else:
+            await msg.reply_text(
+                "❌ Could not extract user ID. Please <b>forward a message</b> from the target, not just their username or text.",
+                parse_mode="HTML"
+            )
+            return
+
+        try:
+            # Check bot admin rights
             bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
             if bot_member.status not in ("administrator", "creator"):
                 await msg.reply_text("❌ Bot is not an admin of the group.")
                 return
 
-            # 3️⃣ Kick (ban + unban)
+            # Kick (ban + unban)
             await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
             await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
-            await msg.reply_text(f"✅ {target_label} has been removed from the group.")
-
+            await msg.reply_text(f"✅ {target_name} (ID: {target_id}) has been removed from the group.")
         except Exception as e:
-            # Give a helpful error without mentioning external bots
-            err_msg = str(e)
-            if "user not found" in err_msg.lower():
-                await msg.reply_text("❌ Could not find that user in the group. Make sure they are still a member.")
-            else:
-                await msg.reply_text(f"❌ Failed to remove member: {err_msg}")
+            await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
 
         return
 
