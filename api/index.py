@@ -101,7 +101,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = msg.text.strip()
 
-    # ========== SPECIAL COMMANDS (Work even if session active) ==========
+    # ========== SPECIAL COMMANDS ==========
     if text == "/debug":
         await msg.reply_text("Testing KV...")
         try:
@@ -122,7 +122,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("🔒 Authentication reset. Send password to continue.")
         return
 
-    # Password check if not authenticated
+    # Password check
     if user.id not in authenticated_users:
         if text == DM_PASSWORD:
             authenticated_users.add(user.id)
@@ -142,7 +142,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Incorrect password.")
         return
 
-    # ========== CANCEL SESSION ==========
+    # ========== CANCEL ==========
     if text == "/cancel":
         any_cancelled = False
         for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}"]:
@@ -155,7 +155,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("No active session to cancel.")
         return
 
-    # ========== LIST & DELETE COMMANDS ==========
+    # ========== LIST & DELETE ==========
     if text.startswith("/list"):
         bots = get_official_bots()
         if not bots:
@@ -180,7 +180,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("Select a bot to delete:", reply_markup=reply_markup)
         return
 
-    # ========== START NEW SESSION COMMANDS ==========
+    # ========== START NEW SESSIONS ==========
     if text.startswith("/add"):
         state = {"step": "name", "data": {}}
         kv_set(f"add_state:{user.id}", json.dumps(state))
@@ -194,11 +194,11 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text.startswith("/memberknock"):
         kv_set(f"knock_state:{user.id}", "waiting")
-        await msg.reply_text("🔨 Send the user ID or @username of the member (or bot) to remove from the group.")
+        await msg.reply_text("🔨 Send the user ID or @username of the member (or bot) to remove from the group.\n💡 Usernames will be automatically converted to numeric IDs.")
         return
 
-    # ========== ACTIVE SESSION INPUT HANDLING ==========
-    # Knock session (debuggable)
+    # ========== ACTIVE SESSION HANDLING ==========
+    # ── Knock session ──
     knock_state = kv_get(f"knock_state:{user.id}")
     if knock_state:
         target = text.strip()
@@ -208,38 +208,42 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         try:
+            # Determine if numeric or username
             if target.lstrip('-').isdigit():
                 target_id = int(target)
-                target_name = target
+                target_label = target
             else:
+                # Assume username (with or without @)
                 username = target if target.startswith('@') else '@' + target
                 try:
                     member = await context.bot.get_chat_member(GROUP_CHAT_ID, username)
                     target_id = member.user.id
-                    target_name = username
-                except Exception as e_inner:
+                    target_label = username
+                except Exception:
+                    # If username fails, we try to get the user's ID from a forwarded message? Not possible.
+                    # Instead we give a helpful error and ask for numeric ID.
                     await msg.reply_text(
-                        f"❌ Could not find user '{username}' in the group.\n"
-                        f"Details: {str(e_inner)}\n\n"
-                        "👉 Please make sure the user is still in the group and try again.\n"
-                        "💡 Alternatively, send their numeric user ID (you can get it from @Getmyid_bot)."
+                        f"❌ Could not resolve username '{username}'. Make sure the user is still in the group.\n"
+                        "💡 Please forward a message from that user to @Getmyid_bot to get their numeric ID, then send that ID to /memberknock."
                     )
                     return
 
+            # Verify bot admin rights
             bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
             if bot_member.status not in ("administrator", "creator"):
                 await msg.reply_text("❌ Bot is not an admin of the group.")
                 return
 
+            # Kick (ban + unban)
             await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
             await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
-            await msg.reply_text(f"✅ Member {target_name} removed from the group.")
+            await msg.reply_text(f"✅ {target_label} has been removed from the group.")
 
-        except Exception as e_outer:
-            await msg.reply_text(f"❌ Failed to remove member: {str(e_outer)}")
+        except Exception as e:
+            await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
         return
 
-    # Transfer session
+    # ── Transfer session ──
     transfer_state = kv_get(f"transfer_state:{user.id}")
     if transfer_state:
         kv_delete(f"transfer_state:{user.id}")
@@ -253,7 +257,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
         return
 
-    # Add session (multi‑step)
+    # ── Add session ──
     add_state_json = kv_get(f"add_state:{user.id}")
     if add_state_json:
         try:
@@ -289,7 +293,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kv_delete(f"add_state:{user.id}")
         return
 
-    # If no session and no command matched
+    # Unknown command
     await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /reset, /debug, /cancel.")
 
 # ---------- CALLBACK QUERY HANDLER ----------
