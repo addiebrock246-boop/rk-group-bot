@@ -100,7 +100,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # /reset
         if text == "/reset":
             authenticated_users.discard(user.id)
-            for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}"]:
+            for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}"]:
                 kv_delete(key)
             await msg.reply_text("🔒 Authentication reset. Send password to continue.")
             return
@@ -117,6 +117,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     "/delete - Delete bots (inline buttons)\n"
                     "/transfer - Send a message to the group\n"
                     "/memberknock - Remove a member (or any bot)\n"
+                    "/membergrow - Add a member (or any bot) to the group\n"
                     "/reset - Clear authentication\n"
                     "/debug - Test KV connection\n"
                     "/cancel - Cancel any session"
@@ -128,7 +129,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # /cancel
         if text == "/cancel":
             any_cancelled = False
-            for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}"]:
+            for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}"]:
                 if kv_get(key):
                     kv_delete(key)
                     any_cancelled = True
@@ -185,8 +186,18 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # /membergrow (NEW)
+        if text.startswith("/membergrow"):
+            kv_set(f"grow_state:{user.id}", "waiting")
+            await msg.reply_text(
+                "🌱 Send the @username or numeric ID of the user/bot you want to <b>add</b> to the group.\n"
+                "⚠️ The user must have a public username (or you know their numeric ID) and must not have privacy settings that block additions.",
+                parse_mode="HTML"
+            )
+            return
+
         # ============ ACTIVE SESSIONS ============
-        # Knock session (hybrid: forward, numeric ID, @username with inline button)
+        # Knock session (hybrid)
         knock_state = kv_get(f"knock_state:{user.id}")
         if knock_state:
             kv_delete(f"knock_state:{user.id}")
@@ -199,7 +210,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_id = None
             target_label = ""
 
-            # 1) Forwarded message
             if forward_from:
                 target_id = forward_from.id
                 target_label = f"@{forward_from.username}" if forward_from.username else forward_from.full_name
@@ -207,7 +217,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 target_id = forward_from_chat.id
                 target_label = f"@{forward_from_chat.username}" if forward_from_chat.username else forward_from_chat.title
             else:
-                # 2) Text input
                 text_input = text.strip()
                 if not text_input:
                     kv_set(f"knock_state:{user.id}", "waiting")
@@ -221,22 +230,18 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         await msg.reply_text("❌ Invalid numeric ID.")
                         return
                 else:
-                    # 3) Assume @username (with or without @)
                     username = text_input if text_input.startswith('@') else '@' + text_input
                     try:
-                        # 🔥 Resolve username to numeric ID globally (works even if not in group)
                         chat = await context.bot.get_chat(username)
                         target_id = chat.id
                         target_label = username
                     except Exception as e:
                         await msg.reply_text(
                             f"❌ Could not resolve username '{username}'.\n"
-                            "👉 Make sure the username exists and try again.\n"
-                            "💡 Alternatively, you can forward a message from that user."
+                            "👉 Make sure the username exists and try again."
                         )
                         return
 
-                    # If we successfully resolved, show the ID with a "Remove" button
                     keyboard = InlineKeyboardMarkup([
                         [InlineKeyboardButton("🗑️ Remove from group", callback_data=f"knock_confirm_{target_id}")]
                     ])
@@ -248,7 +253,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     return
 
-            # Direct removal (for numeric ID or forward)
             if target_id:
                 try:
                     bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
@@ -260,6 +264,52 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been removed from the group.")
                 except Exception as e:
                     await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
+            return
+
+        # Grow session (NEW)
+        grow_state = kv_get(f"grow_state:{user.id}")
+        if grow_state:
+            kv_delete(f"grow_state:{user.id}")
+            if not GROUP_CHAT_ID:
+                await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
+                return
+
+            text_input = text.strip()
+            if not text_input:
+                await msg.reply_text("❌ No input. Send @username or numeric ID.")
+                return
+
+            target_id = None
+            target_label = ""
+
+            if text_input.lstrip('-').isdigit():
+                try:
+                    target_id = int(text_input)
+                    target_label = str(target_id)
+                except:
+                    await msg.reply_text("❌ Invalid numeric ID.")
+                    return
+            else:
+                username = text_input if text_input.startswith('@') else '@' + text_input
+                try:
+                    chat = await context.bot.get_chat(username)
+                    target_id = chat.id
+                    target_label = username
+                except Exception as e:
+                    await msg.reply_text(f"❌ Could not resolve username '{username}'. Make sure it exists.")
+                    return
+
+            # Attempt to add the user to the group
+            try:
+                bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
+                if bot_member.status not in ("administrator", "creator"):
+                    await msg.reply_text("❌ Bot is not an admin of the group.")
+                    return
+
+                await context.bot.invite_chat_member(GROUP_CHAT_ID, target_id)
+                await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
+            except Exception as e:
+                await msg.reply_text(f"❌ Failed to add member: {str(e)}")
             return
 
         # Transfer session
@@ -313,7 +363,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Unknown command
-        await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /reset, /debug, /cancel.")
+        await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /membergrow, /reset, /debug, /cancel.")
     except Exception as e:
         traceback.print_exc()
         try:
@@ -344,7 +394,6 @@ async def delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await context.bot.edit_message_text(f"Error: {str(e)}", chat_id=chat_id, message_id=message_id)
 
-# 🆕 Callback for confirming member removal (after username resolve)
 async def knock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -352,7 +401,6 @@ async def knock_confirm_callback(update: Update, context: ContextTypes.DEFAULT_T
     chat_id = query.message.chat_id
     message_id = query.message.message_id
 
-    # Extract target_id from callback_data (format: knock_confirm_<user_id>)
     parts = data.split("_")
     if len(parts) >= 3:
         try:
