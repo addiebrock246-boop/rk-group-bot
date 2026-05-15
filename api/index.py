@@ -266,7 +266,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
             return
 
-        # Grow session (FIXED v2 – use add_chat_members)
+        # Grow session (FIXED – direct API call)
         grow_state = kv_get(f"grow_state:{user.id}")
         if grow_state:
             kv_delete(f"grow_state:{user.id}")
@@ -299,17 +299,34 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"❌ Could not resolve username '{username}'. Make sure it exists.")
                     return
 
+            # Check admin rights before direct API call
             try:
                 bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
                 if bot_member.status not in ("administrator", "creator"):
                     await msg.reply_text("❌ Bot is not an admin of the group.")
                     return
-
-                # ✅ Use add_chat_members (plural) – the correct method in python-telegram-bot v20+
-                await context.bot.add_chat_members(GROUP_CHAT_ID, [target_id])
-                await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
+                if not bot_member.can_invite_users:
+                    await msg.reply_text("❌ Bot does not have 'Add users' permission. Enable it in group admin settings.")
+                    return
             except Exception as e:
-                await msg.reply_text(f"❌ Failed to add member: {str(e)}")
+                await msg.reply_text(f"❌ Failed to verify bot admin rights: {str(e)}")
+                return
+
+            # 🔥 Direct Telegram API call – works with every library version
+            try:
+                resp = req.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/addChatMember",
+                    json={"chat_id": GROUP_CHAT_ID, "user_id": target_id},
+                    timeout=10
+                )
+                data = resp.json()
+                if resp.status_code == 200 and data.get("ok"):
+                    await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
+                else:
+                    error_msg = data.get("description", resp.text)
+                    await msg.reply_text(f"❌ Failed to add member: {error_msg}")
+            except Exception as e:
+                await msg.reply_text(f"❌ Network error: {str(e)}")
             return
 
         # Transfer session
