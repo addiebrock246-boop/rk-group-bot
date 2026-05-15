@@ -81,127 +81,166 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("You are not authorized.")
             return
 
-        text = msg.text.strip() if msg.text else ""
+        # ── Determine if it's a text or photo message ──
+        is_text = bool(msg.text) or bool(msg.caption)  # treat captions as text
+        is_photo = len(msg.photo) > 0 if msg.photo else False
 
-        # /debug
-        if text == "/debug":
-            await msg.reply_text("Testing KV...")
-            try:
-                kv_set("test_key", "test_value")
-                val = kv_get("test_key")
-                if val == "test_value":
-                    await msg.reply_text("✅ KV is working perfectly!")
-                else:
-                    await msg.reply_text(f"⚠️ KV GET unexpected: {val}")
-            except Exception as e:
-                await msg.reply_text(f"❌ KV Error: {str(e)}")
-            return
+        # Extract text (caption if photo with caption, else normal text)
+        if is_photo and msg.caption:
+            text = msg.caption.strip()
+        elif is_text:
+            text = msg.text.strip() if msg.text else ""
+        else:
+            text = ""
 
-        # /reset
-        if text == "/reset":
-            authenticated_users.discard(user.id)
-            for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}"]:
-                kv_delete(key)
-            await msg.reply_text("🔒 Authentication reset. Send password to continue.")
-            return
-
-        # Password check
-        if user.id not in authenticated_users:
-            if text == DM_PASSWORD:
-                authenticated_users.add(user.id)
-                await msg.reply_text(
-                    "✅ Authenticated.\n"
-                    "📋 Commands:\n"
-                    "/add - Add a new bot (multi‑step)\n"
-                    "/list - List all bots\n"
-                    "/delete - Delete bots (inline buttons)\n"
-                    "/transfer - Send a message to the group\n"
-                    "/memberknock - Remove a member (or any bot) by @username or forward\n"
-                    "/membergrow - Add a member (or any bot) by @username (with auto invite link)\n"
-                    "/reset - Clear authentication\n"
-                    "/debug - Test KV connection\n"
-                    "/cancel - Cancel any session"
-                )
+        # ── IMAGE SESSION (check before command processing) ──
+        image_state = kv_get(f"image_state:{user.id}")
+        if image_state:
+            if is_photo:
+                kv_delete(f"image_state:{user.id}")
+                if not GROUP_CHAT_ID:
+                    await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
+                    return
+                # Get the largest photo (last in array is highest resolution)
+                file_id = msg.photo[-1].file_id
+                try:
+                    await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=file_id)
+                    await msg.reply_text("✅ Photo sent to the group.")
+                except Exception as e:
+                    await msg.reply_text(f"❌ Failed to send photo: {str(e)}")
             else:
-                await msg.reply_text("Incorrect password.")
-            return
+                # Not a photo – remind to send a photo
+                await msg.reply_text("📷 Please send a photo now (not text). Send /cancel to abort.")
+            return  # end of image session processing
 
-        # /cancel
-        if text == "/cancel":
-            any_cancelled = False
-            for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}"]:
-                if kv_get(key):
-                    kv_delete(key)
-                    any_cancelled = True
-            if any_cancelled:
-                await msg.reply_text("🚫 Active session cancelled.")
-            else:
-                await msg.reply_text("No active session to cancel.")
-            return
-
-        # /list
-        if text.startswith("/list"):
-            bots = get_official_bots()
-            if not bots:
-                await msg.reply_text("No bots added yet.")
-            else:
-                resp = "📋 <b>Official Bots:</b>\n"
-                for i, bot in enumerate(bots):
-                    resp += f"{i+1}. {bot['name']} (@{bot['username']}) - {bot['currency']}\n"
-                await msg.reply_html(resp)
-            return
-
-        # /delete
-        if text.startswith("/delete"):
-            bots = get_official_bots()
-            if not bots:
-                await msg.reply_text("No bots to delete.")
+        # ── COMMAND HANDLING (only for text) ──
+        if is_text:
+            # /debug
+            if text == "/debug":
+                await msg.reply_text("Testing KV...")
+                try:
+                    kv_set("test_key", "test_value")
+                    val = kv_get("test_key")
+                    if val == "test_value":
+                        await msg.reply_text("✅ KV is working perfectly!")
+                    else:
+                        await msg.reply_text(f"⚠️ KV GET unexpected: {val}")
+                except Exception as e:
+                    await msg.reply_text(f"❌ KV Error: {str(e)}")
                 return
-            keyboard = []
-            for i, bot in enumerate(bots):
-                keyboard.append([InlineKeyboardButton(f"{bot['name']} (@{bot['username']})", callback_data=f"del_{i}")])
-            keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="del_cancel")])
-            await msg.reply_text("Select a bot to delete:", reply_markup=InlineKeyboardMarkup(keyboard))
-            return
 
-        # /add
-        if text.startswith("/add"):
-            kv_set(f"add_state:{user.id}", json.dumps({"step":"name","data":{}}))
-            await msg.reply_text("Send bot name:")
-            return
+            # /reset
+            if text == "/reset":
+                authenticated_users.discard(user.id)
+                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}"]:
+                    kv_delete(key)
+                await msg.reply_text("🔒 Authentication reset. Send password to continue.")
+                return
 
-        # /transfer
-        if text.startswith("/transfer"):
-            kv_set(f"transfer_state:{user.id}", "waiting")
-            await msg.reply_text("✉️ Please send the message you want to forward to the group.")
-            return
+            # Password check
+            if user.id not in authenticated_users:
+                if text == DM_PASSWORD:
+                    authenticated_users.add(user.id)
+                    await msg.reply_text(
+                        "✅ Authenticated.\n"
+                        "📋 Commands:\n"
+                        "/add - Add a new bot (multi‑step)\n"
+                        "/list - List all bots\n"
+                        "/delete - Delete bots (inline buttons)\n"
+                        "/transfer - Send a message to the group\n"
+                        "/memberknock - Remove a member (or any bot)\n"
+                        "/membergrow - Add a member (or any bot) to the group\n"
+                        "/image - Send a photo to the group\n"
+                        "/reset - Clear authentication\n"
+                        "/debug - Test KV connection\n"
+                        "/cancel - Cancel any session"
+                    )
+                else:
+                    await msg.reply_text("Incorrect password.")
+                return
 
-        # /memberknock
-        if text.startswith("/memberknock"):
-            kv_set(f"knock_state:{user.id}", "waiting")
-            await msg.reply_text(
-                "🔨 Send the @username, numeric ID, or <b>forward any message</b> from the user/bot you want to remove.\n"
-                "✨ If you send a @username, I'll show you the numeric ID and a <b>Remove</b> button.\n"
-                "💡 If I can't find the username, simply <b>forward a message</b> from that person – it always works!",
-                parse_mode="HTML"
-            )
-            return
+            # /cancel
+            if text == "/cancel":
+                any_cancelled = False
+                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}"]:
+                    if kv_get(key):
+                        kv_delete(key)
+                        any_cancelled = True
+                if any_cancelled:
+                    await msg.reply_text("🚫 Active session cancelled.")
+                else:
+                    await msg.reply_text("No active session to cancel.")
+                return
 
-        # /membergrow
-        if text.startswith("/membergrow"):
-            kv_set(f"grow_state:{user.id}", "waiting")
-            await msg.reply_text(
-                "🌱 Send the @username or numeric ID of the user/bot you want to <b>add</b> to the group.\n"
-                "⚠️ The user must have a public username (or you know their numeric ID).\n"
-                "✨ If I can't add directly (e.g., privacy settings), I'll send you an invite link automatically.",
-                parse_mode="HTML"
-            )
-            return
+            # /list
+            if text.startswith("/list"):
+                bots = get_official_bots()
+                if not bots:
+                    await msg.reply_text("No bots added yet.")
+                else:
+                    resp = "📋 <b>Official Bots:</b>\n"
+                    for i, bot in enumerate(bots):
+                        resp += f"{i+1}. {bot['name']} (@{bot['username']}) - {bot['currency']}\n"
+                    await msg.reply_html(resp)
+                return
 
-        # ============ ACTIVE SESSIONS ============
+            # /delete
+            if text.startswith("/delete"):
+                bots = get_official_bots()
+                if not bots:
+                    await msg.reply_text("No bots to delete.")
+                    return
+                keyboard = []
+                for i, bot in enumerate(bots):
+                    keyboard.append([InlineKeyboardButton(f"{bot['name']} (@{bot['username']})", callback_data=f"del_{i}")])
+                keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="del_cancel")])
+                await msg.reply_text("Select a bot to delete:", reply_markup=InlineKeyboardMarkup(keyboard))
+                return
+
+            # /add
+            if text.startswith("/add"):
+                kv_set(f"add_state:{user.id}", json.dumps({"step":"name","data":{}}))
+                await msg.reply_text("Send bot name:")
+                return
+
+            # /transfer
+            if text.startswith("/transfer"):
+                kv_set(f"transfer_state:{user.id}", "waiting")
+                await msg.reply_text("✉️ Please send the message you want to forward to the group.")
+                return
+
+            # /memberknock
+            if text.startswith("/memberknock"):
+                kv_set(f"knock_state:{user.id}", "waiting")
+                await msg.reply_text(
+                    "🔨 Send the @username, numeric ID, or <b>forward any message</b> from the user/bot you want to remove.\n"
+                    "✨ If you send a @username, I'll show you the numeric ID and a <b>Remove</b> button.\n"
+                    "💡 If I can't find the username, simply <b>forward a message</b> from that person – it always works!",
+                    parse_mode="HTML"
+                )
+                return
+
+            # /membergrow
+            if text.startswith("/membergrow"):
+                kv_set(f"grow_state:{user.id}", "waiting")
+                await msg.reply_text(
+                    "🌱 Send the @username or numeric ID of the user/bot you want to <b>add</b> to the group.\n"
+                    "⚠️ The user must have a public username (or you know their numeric ID).\n"
+                    "✨ If I can't add directly (e.g., privacy settings), I'll send you an invite link automatically.",
+                    parse_mode="HTML"
+                )
+                return
+
+            # /image (NEW)
+            if text.startswith("/image"):
+                kv_set(f"image_state:{user.id}", "waiting")
+                await msg.reply_text("🖼️ Send me the photo you want to post in the group.")
+                return
+
+        # ============ ACTIVE SESSIONS (only if text) ============
         # Knock session
         knock_state = kv_get(f"knock_state:{user.id}")
-        if knock_state:
+        if knock_state and is_text:
             kv_delete(f"knock_state:{user.id}")
             if not GROUP_CHAT_ID:
                 await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
@@ -238,7 +277,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         target_id = chat.id
                         target_label = username
                     except Exception:
-                        # username not found → ask to forward
                         kv_set(f"knock_state:{user.id}", "waiting")
                         await msg.reply_text(
                             f"❌ I couldn't find the user '{username}'.\n"
@@ -273,7 +311,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Grow session
         grow_state = kv_get(f"grow_state:{user.id}")
-        if grow_state:
+        if grow_state and is_text:
             kv_delete(f"grow_state:{user.id}")
             if not GROUP_CHAT_ID:
                 await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
@@ -310,7 +348,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         target_id = chat.id
                         target_label = username
                     except Exception:
-                        # Username not found – automatic invite link
+                        # automatic invite link
                         try:
                             invite_link = await context.bot.create_chat_invite_link(
                                 GROUP_CHAT_ID,
@@ -319,9 +357,8 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                             link = invite_link.invite_link
                             await msg.reply_text(
-                                f"🔗 <b>{username}</b> ko direct add nahi kar paya (maybe user never talked to bot or username wrong).\n"
-                                f"👇 Send them this invite link – one click join:\n"
-                                f"{link}\n\n"
+                                f"🔗 <b>{username}</b> ko direct add nahi kar paya.\n"
+                                f"👇 Send them this invite link:\n{link}\n\n"
                                 "⚠️ Link is single‑use.",
                                 parse_mode="HTML"
                             )
@@ -383,7 +420,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Transfer session
         transfer_state = kv_get(f"transfer_state:{user.id}")
-        if transfer_state:
+        if transfer_state and is_text:
             kv_delete(f"transfer_state:{user.id}")
             if GROUP_CHAT_ID:
                 try:
@@ -397,7 +434,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Add session
         add_state_json = kv_get(f"add_state:{user.id}")
-        if add_state_json:
+        if add_state_json and is_text:
             try:
                 state = json.loads(add_state_json)
             except:
@@ -431,8 +468,9 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 kv_delete(f"add_state:{user.id}")
             return
 
-        # Unknown command
-        await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /membergrow, /reset, /debug, /cancel.")
+        # Unknown command / message
+        if is_text:
+            await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /membergrow, /image, /reset, /debug, /cancel.")
     except Exception as e:
         traceback.print_exc()
         try:
@@ -587,8 +625,12 @@ def webhook():
     try:
         data = request.get_json()
         application = Application.builder().token(BOT_TOKEN).build()
+        # Handle text, captions (treated as text), and photos in the same DM handler
+        application.add_handler(MessageHandler(
+            (filters.TEXT | filters.PHOTO) & filters.ChatType.PRIVATE,
+            dm_handler
+        ))
         application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
-        application.add_handler(MessageHandler(filters.TEXT & filters.ChatType.PRIVATE, dm_handler))
         application.add_handler(CallbackQueryHandler(delete_callback, pattern=r"^del_"))
         application.add_handler(CallbackQueryHandler(knock_confirm_callback, pattern=r"^knock_confirm_"))
         application.add_handler(CallbackQueryHandler(grow_confirm_callback, pattern=r"^grow_confirm_"))
