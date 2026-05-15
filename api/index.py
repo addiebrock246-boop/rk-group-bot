@@ -185,7 +185,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # ============ ACTIVE SESSIONS ============
-        # Knock session (hybrid)
+        # Knock session (fixed)
         knock_state = kv_get(f"knock_state:{user.id}")
         if knock_state:
             kv_delete(f"knock_state:{user.id}")
@@ -193,8 +193,9 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
                 return
 
-            forward_from = msg.forward_from
-            forward_from_chat = msg.forward_from_chat
+            # Safely get forward attributes
+            forward_from = getattr(msg, 'forward_from', None)
+            forward_from_chat = getattr(msg, 'forward_from_chat', None)
             target_id = None
             target_label = ""
 
