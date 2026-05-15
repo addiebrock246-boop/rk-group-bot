@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
+# ⚠️ Environment variables se values aayengi
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
 GROUP_CHAT_ID = os.environ.get("GROUP_CHAT_ID", "")
@@ -128,7 +129,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/list - List all bots\n"
                 "/delete - Delete bots (inline buttons)\n"
                 "/transfer - Send a message to the group\n"
-                "/memberknock - Remove a member (or any bot)\n"
+                "/memberknock - Remove a member (or any bot) by @username or forward\n"
                 "/reset - Clear authentication\n"
                 "/debug - Test KV connection\n"
                 "/cancel - Cancel current add/transfer/knock session"
@@ -193,8 +194,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if text.startswith("/memberknock"):
         kv_set(f"knock_state:{user.id}", "waiting")
         await msg.reply_text(
-            "🔨 <b>Forward a message</b> from the user (or bot) you want to remove.\n"
-            "📩 Simply forward any of their messages here – the bot will extract the ID and kick them instantly.",
+            "🔨 Send the @username, numeric ID, or <b>forward any message</b> from the user/bot you want to remove.",
             parse_mode="HTML"
         )
         return
@@ -203,7 +203,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ACTIVE SESSION HANDLING
     # ═══════════════════════════════════
 
-    # ── KNOCK SESSION (forward handler) ──
+    # ── KNOCK SESSION (hybrid: username / forward / numeric) ──
     knock_state = kv_get(f"knock_state:{user.id}")
     if knock_state:
         kv_delete(f"knock_state:{user.id}")
@@ -212,24 +212,56 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
             return
 
-        # Extract user ID from forwarded message
+        # 1) Try to extract from forwarded message first
         forward_from = msg.forward_from
         forward_from_chat = msg.forward_from_chat
 
+        target_id = None
+        target_label = ""
+
         if forward_from:
             target_id = forward_from.id
-            target_name = f"@{forward_from.username}" if forward_from.username else forward_from.full_name
+            target_label = f"@{forward_from.username}" if forward_from.username else forward_from.full_name
         elif forward_from_chat:
-            # For bots or channels, forward_from_chat contains the chat info
             target_id = forward_from_chat.id
-            target_name = f"@{forward_from_chat.username}" if forward_from_chat.username else forward_from_chat.title
+            target_label = f"@{forward_from_chat.username}" if forward_from_chat.username else forward_from_chat.title
         else:
-            await msg.reply_text(
-                "❌ Could not extract user ID. Please <b>forward a message</b> from the target, not just their username or text.",
-                parse_mode="HTML"
-            )
-            return
+            # 2) No forward – try text as numeric ID or @username
+            text_input = text.strip()
+            if text_input:
+                if text_input.lstrip('-').isdigit():
+                    try:
+                        target_id = int(text_input)
+                        target_label = text_input
+                    except:
+                        await msg.reply_text("❌ Invalid numeric ID.")
+                        return
+                else:
+                    username = text_input if text_input.startswith('@') else '@' + text_input
+                    try:
+                        member = await context.bot.get_chat_member(GROUP_CHAT_ID, username)
+                        target_id = member.user.id
+                        target_label = username
+                    except:
+                        # username resolve nahi hua, forward ke liye kaho
+                        await msg.reply_text(
+                            "❌ Could not find that user in the group.\n"
+                            "👉 Instead, <b>forward any message</b> from that user (or bot) to me, and I'll extract the ID automatically.",
+                            parse_mode="HTML"
+                        )
+                        # Re‑set knock state so user can forward
+                        kv_set(f"knock_state:{user.id}", "waiting")
+                        return
+            else:
+                await msg.reply_text(
+                    "❌ No user information received.\n"
+                    "👉 Send a numeric ID, @username, or <b>forward a message</b> from the target.",
+                    parse_mode="HTML"
+                )
+                kv_set(f"knock_state:{user.id}", "waiting")
+                return
 
+        # Ab target_id set ho chuka hai
         try:
             # Check bot admin rights
             bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
@@ -240,10 +272,9 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Kick (ban + unban)
             await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
             await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
-            await msg.reply_text(f"✅ {target_name} (ID: {target_id}) has been removed from the group.")
+            await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been removed from the group.")
         except Exception as e:
             await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
-
         return
 
     # ── TRANSFER SESSION ──
