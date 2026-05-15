@@ -186,7 +186,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
-        # /membergrow (NEW)
+        # /membergrow
         if text.startswith("/membergrow"):
             kv_set(f"grow_state:{user.id}", "waiting")
             await msg.reply_text(
@@ -266,7 +266,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
             return
 
-        # Grow session (NEW)
+        # Grow session (FIXED)
         grow_state = kv_get(f"grow_state:{user.id}")
         if grow_state:
             kv_delete(f"grow_state:{user.id}")
@@ -299,14 +299,14 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text(f"❌ Could not resolve username '{username}'. Make sure it exists.")
                     return
 
-            # Attempt to add the user to the group
             try:
                 bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
                 if bot_member.status not in ("administrator", "creator"):
                     await msg.reply_text("❌ Bot is not an admin of the group.")
                     return
 
-                await context.bot.invite_chat_member(GROUP_CHAT_ID, target_id)
+                # ✅ Use add_chat_member (works in python-telegram-bot v13 and v20)
+                await context.bot.add_chat_member(GROUP_CHAT_ID, target_id)
                 await msg.reply_text(f"✅ {target_label} (ID: {target_id}) has been <b>added</b> to the group.", parse_mode="HTML")
             except Exception as e:
                 await msg.reply_text(f"❌ Failed to add member: {str(e)}")
