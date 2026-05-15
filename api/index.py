@@ -133,7 +133,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/list - List all bots\n"
                 "/delete - Delete bots (inline buttons)\n"
                 "/transfer - Send a message to the group\n"
-                "/memberknock - Remove a member from the group\n"
+                "/memberknock - Remove a member (or any bot) from the group\n"
                 "/reset - Clear authentication\n"
                 "/debug - Test KV connection\n"
                 "/cancel - Cancel current add/transfer/knock session"
@@ -194,29 +194,39 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text.startswith("/memberknock"):
         kv_set(f"knock_state:{user.id}", "waiting")
-        await msg.reply_text("🔨 Send the user ID or @username of the member to remove from the group.")
+        await msg.reply_text("🔨 Send the user ID or @username of the member (or bot) to remove from the group.")
         return
 
     # ========== ACTIVE SESSION INPUT HANDLING ==========
-    # Knock session
+    # Knock session (UPDATED – works for both humans and bots)
     knock_state = kv_get(f"knock_state:{user.id}")
     if knock_state:
-        target = text
+        target = text.strip()
         kv_delete(f"knock_state:{user.id}")
         if not GROUP_CHAT_ID:
             await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
             return
+
+        # Resolve member (human or bot)
         try:
-            if target.startswith("@"):
-                target_username = target[1:]
-                member = await context.bot.get_chat_member(GROUP_CHAT_ID, "@" + target_username)
-                target_id = member.user.id
-            else:
+            if target.lstrip('-').isdigit():          # numeric ID
                 target_id = int(target)
-            # Kick (ban + unban)
+            else:
+                # Username – automatically add @ if missing
+                username = target if target.startswith('@') else '@' + target
+                member = await context.bot.get_chat_member(GROUP_CHAT_ID, username)
+                target_id = member.user.id
+
+            # Check bot admin rights
+            bot_member = await context.bot.get_chat_member(GROUP_CHAT_ID, context.bot.id)
+            if bot_member.status not in ("administrator", "creator"):
+                await msg.reply_text("❌ Bot is not an admin of the group.")
+                return
+
+            # Kick (ban + unban) – works for bots and humans
             await context.bot.ban_chat_member(GROUP_CHAT_ID, target_id)
             await context.bot.unban_chat_member(GROUP_CHAT_ID, target_id)
-            await msg.reply_text(f"✅ Member {target} has been removed from the group.")
+            await msg.reply_text(f"✅ Member removed from the group.")
         except Exception as e:
             await msg.reply_text(f"❌ Failed to remove member: {str(e)}")
         return
