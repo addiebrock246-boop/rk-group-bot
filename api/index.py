@@ -1,4 +1,5 @@
 import os, json, random, requests as req, asyncio, traceback
+from datetime import datetime
 from flask import Flask, request, jsonify
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, MessageHandler, CallbackQueryHandler, filters, ContextTypes
@@ -67,6 +68,38 @@ async def welcome_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE)
             text = ("👋 <b>Welcome, {}</b>!\n━━━━━━━━━━━━━━━━━━━━\n🎰 <b>PLAY OUR RK OFFICIAL GAMES</b>\n{}\n━━━━━━━━━━━━━━━━━━━━").format(member.mention_html(), "\n".join(lines))
         await update.message.reply_html(text)
 
+# ---------- Sent Messages Storage ----------
+SENT_MSGS_KEY = f"sent_msgs:{GROUP_CHAT_ID}" if GROUP_CHAT_ID else "sent_msgs:default"
+
+def add_sent_record(msg_type, msg_id, snippet=""):
+    try:
+        data = kv_get(SENT_MSGS_KEY)
+        records = json.loads(data) if data else []
+    except:
+        records = []
+    records.append({
+        "msg_id": msg_id,
+        "type": msg_type,
+        "timestamp": datetime.utcnow().isoformat(),
+        "snippet": snippet[:100]
+    })
+    kv_set(SENT_MSGS_KEY, json.dumps(records))
+
+def get_sent_records(msg_type=None):
+    try:
+        data = kv_get(SENT_MSGS_KEY)
+        records = json.loads(data) if data else []
+    except:
+        records = []
+    if msg_type:
+        records = [r for r in records if r["type"] == msg_type]
+    return records
+
+def remove_sent_record(msg_id):
+    records = get_sent_records()
+    records = [r for r in records if r["msg_id"] != msg_id]
+    kv_set(SENT_MSGS_KEY, json.dumps(records))
+
 # ---------- DM ----------
 DM_PASSWORD = "RISHAVBHAGWANHAI"
 authenticated_users = set()
@@ -106,7 +139,8 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 file_id = msg.photo[-1].file_id
                 try:
-                    await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=file_id)
+                    sent_msg = await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=file_id)
+                    add_sent_record("photo", sent_msg.message_id, msg.caption or "Photo")
                     await msg.reply_text("✅ Photo sent to the group.")
                 except Exception as e:
                     await msg.reply_text(f"❌ Failed to send photo: {str(e)}")
@@ -114,7 +148,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("📷 Please send a photo now (not text/video). Send /cancel to abort.")
             return
 
-        # ── VIDEO SESSION (NEW) ──
+        # ── VIDEO SESSION ──
         video_state = kv_get(f"video_state:{user.id}")
         if video_state:
             if is_video:
@@ -124,13 +158,67 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     return
                 file_id = msg.video.file_id
                 try:
-                    await context.bot.send_video(chat_id=GROUP_CHAT_ID, video=file_id)
+                    sent_msg = await context.bot.send_video(chat_id=GROUP_CHAT_ID, video=file_id)
+                    add_sent_record("video", sent_msg.message_id, msg.caption or "Video")
                     await msg.reply_text("✅ Video sent to the group.")
                 except Exception as e:
                     await msg.reply_text(f"❌ Failed to send video: {str(e)}")
             else:
                 await msg.reply_text("🎥 Please send a video now (not photo/text). Send /cancel to abort.")
             return
+
+        # ── DLTMVP SESSION (NEW) ──
+        dlt_state = kv_get(f"dltmvp_state:{user.id}")
+        if dlt_state:
+            try:
+                state_data = json.loads(dlt_state)
+            except:
+                state_data = {"step": "choose_type"}
+
+            if state_data["step"] == "choose_type":
+                choice = text.lower().strip()
+                if choice in ("photo", "video", "text"):
+                    records = get_sent_records(msg_type=choice)
+                    if not records:
+                        await msg.reply_text(f"❌ No {choice} messages found.")
+                        kv_delete(f"dltmvp_state:{user.id}")
+                        return
+                    # Build a numbered list
+                    lines = [f"📋 <b>{choice.capitalize()} messages:</b>\n"]
+                    for i, rec in enumerate(records, 1):
+                        tstamp = rec["timestamp"][:19]  # YYYY-MM-DDTHH:MM:SS
+                        snippet = rec["snippet"] or ""
+                        lines.append(f"{i}. 🆔 {rec['msg_id']} | {tstamp} | {snippet[:50]}")
+                    lines.append("\n✏️ <b>Reply with the number</b> to delete that message, or /cancel.")
+                    await msg.reply_html("\n".join(lines))
+                    # Save state with list of records for later verification
+                    state_data["step"] = "confirm_delete"
+                    state_data["type"] = choice
+                    state_data["records"] = records
+                    kv_set(f"dltmvp_state:{user.id}", json.dumps(state_data))
+                else:
+                    await msg.reply_text("❌ Invalid choice. Please reply with <b>photo</b>, <b>video</b> or <b>text</b>.", parse_mode="HTML")
+                return
+
+            elif state_data["step"] == "confirm_delete":
+                try:
+                    idx = int(text.strip()) - 1
+                    records = state_data["records"]
+                    if 0 <= idx < len(records):
+                        rec = records[idx]
+                        # Delete from Telegram
+                        await context.bot.delete_message(chat_id=GROUP_CHAT_ID, message_id=rec["msg_id"])
+                        # Remove from storage
+                        remove_sent_record(rec["msg_id"])
+                        await msg.reply_text(f"✅ Message (ID: {rec['msg_id']}) deleted from group.")
+                        kv_delete(f"dltmvp_state:{user.id}")
+                    else:
+                        await msg.reply_text("❌ Invalid number. Try again or /cancel.")
+                except ValueError:
+                    await msg.reply_text("❌ Please reply with a valid number.")
+                except Exception as e:
+                    await msg.reply_text(f"❌ Failed to delete message: {str(e)}")
+                return
 
         # ── COMMAND HANDLING (only for text) ──
         if is_text:
@@ -151,7 +239,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # /reset
             if text == "/reset":
                 authenticated_users.discard(user.id)
-                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}", f"video_state:{user.id}"]:
+                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}", f"video_state:{user.id}", f"dltmvp_state:{user.id}"]:
                     kv_delete(key)
                 await msg.reply_text("🔒 Authentication reset. Send password to continue.")
                 return
@@ -171,6 +259,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "/membergrow - Add a member (or any bot) to the group\n"
                         "/image - Send a photo to the group\n"
                         "/video - Send a video to the group\n"
+                        "/dltmvp - Delete a message, photo, or video sent by bot\n"
                         "/reset - Clear authentication\n"
                         "/debug - Test KV connection\n"
                         "/cancel - Cancel any session"
@@ -182,7 +271,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # /cancel
             if text == "/cancel":
                 any_cancelled = False
-                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}", f"video_state:{user.id}"]:
+                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}", f"video_state:{user.id}", f"dltmvp_state:{user.id}"]:
                     if kv_get(key):
                         kv_delete(key)
                         any_cancelled = True
@@ -257,10 +346,16 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("🖼️ Send me the photo you want to post in the group.")
                 return
 
-            # /video (NEW)
+            # /video
             if text.startswith("/video"):
                 kv_set(f"video_state:{user.id}", "waiting")
                 await msg.reply_text("🎥 Send me the video you want to post in the group.")
+                return
+
+            # /dltmvp (NEW)
+            if text.startswith("/dltmvp"):
+                kv_set(f"dltmvp_state:{user.id}", json.dumps({"step":"choose_type"}))
+                await msg.reply_text("🗑️ <b>What do you want to delete?</b>\nReply with <b>photo</b>, <b>video</b> or <b>text</b>.", parse_mode="HTML")
                 return
 
         # ============ ACTIVE SESSIONS (only if text) ============
@@ -450,7 +545,8 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kv_delete(f"transfer_state:{user.id}")
             if GROUP_CHAT_ID:
                 try:
-                    await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=text)
+                    sent_msg = await context.bot.send_message(chat_id=GROUP_CHAT_ID, text=text)
+                    add_sent_record("text", sent_msg.message_id, text[:100])
                     await msg.reply_text("✅ Message sent to the group.")
                 except Exception as e:
                     await msg.reply_text(f"❌ Failed to send message: {str(e)}")
@@ -496,7 +592,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Unknown command / message
         if is_text:
-            await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /membergrow, /image, /video, /reset, /debug, /cancel.")
+            await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /membergrow, /image, /video, /dltmvp, /reset, /debug, /cancel.")
     except Exception as e:
         traceback.print_exc()
         try:
