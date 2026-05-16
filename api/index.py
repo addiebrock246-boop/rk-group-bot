@@ -81,19 +81,22 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("You are not authorized.")
             return
 
-        # ── Determine if it's a text or photo message ──
-        is_text = bool(msg.text) or bool(msg.caption)  # treat captions as text
+        # ── Determine if it's text, photo, or video ──
+        is_text = bool(msg.text) or bool(msg.caption)
         is_photo = len(msg.photo) > 0 if msg.photo else False
+        is_video = bool(msg.video)
 
-        # Extract text (caption if photo with caption, else normal text)
-        if is_photo and msg.caption:
+        # Extract text (caption if media with caption, else normal text)
+        if is_video and msg.caption:
+            text = msg.caption.strip()
+        elif is_photo and msg.caption:
             text = msg.caption.strip()
         elif is_text:
             text = msg.text.strip() if msg.text else ""
         else:
             text = ""
 
-        # ── IMAGE SESSION (check before command processing) ──
+        # ── IMAGE SESSION ──
         image_state = kv_get(f"image_state:{user.id}")
         if image_state:
             if is_photo:
@@ -101,7 +104,6 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not GROUP_CHAT_ID:
                     await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
                     return
-                # Get the largest photo (last in array is highest resolution)
                 file_id = msg.photo[-1].file_id
                 try:
                     await context.bot.send_photo(chat_id=GROUP_CHAT_ID, photo=file_id)
@@ -109,9 +111,26 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception as e:
                     await msg.reply_text(f"❌ Failed to send photo: {str(e)}")
             else:
-                # Not a photo – remind to send a photo
-                await msg.reply_text("📷 Please send a photo now (not text). Send /cancel to abort.")
-            return  # end of image session processing
+                await msg.reply_text("📷 Please send a photo now (not text/video). Send /cancel to abort.")
+            return
+
+        # ── VIDEO SESSION (NEW) ──
+        video_state = kv_get(f"video_state:{user.id}")
+        if video_state:
+            if is_video:
+                kv_delete(f"video_state:{user.id}")
+                if not GROUP_CHAT_ID:
+                    await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
+                    return
+                file_id = msg.video.file_id
+                try:
+                    await context.bot.send_video(chat_id=GROUP_CHAT_ID, video=file_id)
+                    await msg.reply_text("✅ Video sent to the group.")
+                except Exception as e:
+                    await msg.reply_text(f"❌ Failed to send video: {str(e)}")
+            else:
+                await msg.reply_text("🎥 Please send a video now (not photo/text). Send /cancel to abort.")
+            return
 
         # ── COMMAND HANDLING (only for text) ──
         if is_text:
@@ -132,7 +151,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # /reset
             if text == "/reset":
                 authenticated_users.discard(user.id)
-                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}"]:
+                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}", f"video_state:{user.id}"]:
                     kv_delete(key)
                 await msg.reply_text("🔒 Authentication reset. Send password to continue.")
                 return
@@ -151,6 +170,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "/memberknock - Remove a member (or any bot)\n"
                         "/membergrow - Add a member (or any bot) to the group\n"
                         "/image - Send a photo to the group\n"
+                        "/video - Send a video to the group\n"
                         "/reset - Clear authentication\n"
                         "/debug - Test KV connection\n"
                         "/cancel - Cancel any session"
@@ -162,7 +182,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # /cancel
             if text == "/cancel":
                 any_cancelled = False
-                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}"]:
+                for key in [f"add_state:{user.id}", f"transfer_state:{user.id}", f"knock_state:{user.id}", f"grow_state:{user.id}", f"image_state:{user.id}", f"video_state:{user.id}"]:
                     if kv_get(key):
                         kv_delete(key)
                         any_cancelled = True
@@ -231,10 +251,16 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            # /image (NEW)
+            # /image
             if text.startswith("/image"):
                 kv_set(f"image_state:{user.id}", "waiting")
                 await msg.reply_text("🖼️ Send me the photo you want to post in the group.")
+                return
+
+            # /video (NEW)
+            if text.startswith("/video"):
+                kv_set(f"video_state:{user.id}", "waiting")
+                await msg.reply_text("🎥 Send me the video you want to post in the group.")
                 return
 
         # ============ ACTIVE SESSIONS (only if text) ============
@@ -470,7 +496,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Unknown command / message
         if is_text:
-            await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /membergrow, /image, /reset, /debug, /cancel.")
+            await msg.reply_text("Unknown command. Use /add, /list, /delete, /transfer, /memberknock, /membergrow, /image, /video, /reset, /debug, /cancel.")
     except Exception as e:
         traceback.print_exc()
         try:
@@ -625,9 +651,9 @@ def webhook():
     try:
         data = request.get_json()
         application = Application.builder().token(BOT_TOKEN).build()
-        # Handle text, captions (treated as text), and photos in the same DM handler
+        # Handle text, photos, and videos in the same DM handler
         application.add_handler(MessageHandler(
-            (filters.TEXT | filters.PHOTO) & filters.ChatType.PRIVATE,
+            (filters.TEXT | filters.PHOTO | filters.VIDEO) & filters.ChatType.PRIVATE,
             dm_handler
         ))
         application.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_new_member))
