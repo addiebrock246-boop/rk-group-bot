@@ -114,7 +114,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("📷 Please send a photo now (not text/video). Send /cancel to abort.")
             return
 
-        # ── VIDEO SESSION (NEW) ──
+        # ── VIDEO SESSION (SENDS AS ANIMATION = MUTE) ──
         video_state = kv_get(f"video_state:{user.id}")
         if video_state:
             if is_video:
@@ -123,9 +123,17 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await msg.reply_text("❌ GROUP_CHAT_ID is not set.")
                     return
                 file_id = msg.video.file_id
+                file_size = msg.video.file_size  # bytes
+                max_size = 50 * 1024 * 1024      # 50 MB
+                if file_size > max_size:
+                    await msg.reply_text(
+                        f"❌ Video {file_size / (1024*1024):.1f} MB ka hai. Maximum 50 MB allowed hai."
+                    )
+                    return
                 try:
-                    await context.bot.send_video(chat_id=GROUP_CHAT_ID, video=file_id)
-                    await msg.reply_text("✅ Video sent to the group.")
+                    # 🔇 Send as animation (no audio) – mute workaround
+                    await context.bot.send_animation(chat_id=GROUP_CHAT_ID, animation=file_id)
+                    await msg.reply_text("✅ Video sent (muted) to the group.")
                 except Exception as e:
                     await msg.reply_text(f"❌ Failed to send video: {str(e)}")
             else:
@@ -170,7 +178,7 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         "/memberknock - Remove a member (or any bot)\n"
                         "/membergrow - Add a member (or any bot) to the group\n"
                         "/image - Send a photo to the group\n"
-                        "/video - Send a video to the group\n"
+                        "/video - Send a video (muted) to the group\n"
                         "/reset - Clear authentication\n"
                         "/debug - Test KV connection\n"
                         "/cancel - Cancel any session"
@@ -257,10 +265,10 @@ async def dm_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await msg.reply_text("🖼️ Send me the photo you want to post in the group.")
                 return
 
-            # /video (NEW)
+            # /video
             if text.startswith("/video"):
                 kv_set(f"video_state:{user.id}", "waiting")
-                await msg.reply_text("🎥 Send me the video you want to post in the group.")
+                await msg.reply_text("🎥 Send me the video you want to post in the group.\n🔇 It will be sent **muted** (as animation).")
                 return
 
         # ============ ACTIVE SESSIONS (only if text) ============
